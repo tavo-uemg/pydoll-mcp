@@ -1266,9 +1266,20 @@ async def create_browser_session(
                 options.add_argument(arg)
         
         browser = Chrome(options=options)
+        
+        # Start the browser immediately and get the initial tab
+        logger.info(f"Starting browser for session {session_id}")
+        initial_tab = await browser.start()
+        logger.info(f"Browser started successfully for session {session_id}")
+        
         BROWSER_SESSIONS[session_id] = browser
         
-        return create_success_response(f"Browser session '{session_id}' created (not started yet - call start_browser to initialize)")
+        # Store the initial tab
+        initial_tab_id = f"{session_id}_initial"
+        TAB_SESSIONS[initial_tab_id] = initial_tab
+        logger.info(f"Initial tab stored with ID {initial_tab_id}")
+        
+        return create_success_response(f"Browser session '{session_id}' created with initial tab '{initial_tab_id}'")
         
     except Exception as e:
         return create_error_response(f"Failed to create browser session: {str(e)}")
@@ -1431,20 +1442,10 @@ async def create_tab(browser_session_id: str, tab_id: str, url: Optional[str] = 
         
         browser = BROWSER_SESSIONS[browser_session_id]
         
-        # Check if browser has been started - if not, start it first
-        if not hasattr(browser, '_browser_process_manager') or not browser._browser_process_manager._process:
-            logger.info(f"Browser {browser_session_id} not started yet, starting it now")
-            initial_tab = await asyncio.wait_for(browser.start(), timeout=60)
-            
-            # Store the initial tab if we don't already have tabs for this session
-            existing_tabs = [tid for tid in TAB_SESSIONS.keys() if tid.startswith(f"{browser_session_id}_")]
-            if not existing_tabs:
-                initial_tab_id = f"{browser_session_id}_initial"
-                TAB_SESSIONS[initial_tab_id] = initial_tab
-                logger.info(f"Initial tab stored with ID {initial_tab_id}")
-        
-        # Create new tab with timeout
-        tab = await asyncio.wait_for(browser.new_tab(url or ""), timeout=30)
+        # Create new tab (browser should already be started)
+        logger.info(f"Creating new tab {tab_id} for session {browser_session_id}")
+        tab = await browser.new_tab(url or "")
+        logger.info(f"Tab created successfully: {tab_id}")
         TAB_SESSIONS[tab_id] = tab
         
         return create_success_response(f"Tab '{tab_id}' created successfully" + (f" and navigated to {url}" if url else ""))
