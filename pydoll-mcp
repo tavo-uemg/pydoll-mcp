@@ -1,0 +1,3244 @@
+#!/usr/bin/env python3
+"""
+PyDoll Browser Automation Server - Complete JSON-RPC Implementation
+==================================================================
+
+Provides complete browser automation capabilities through direct JSON-RPC protocol.
+Self-contained server with no external dependencies or wrapper scripts required.
+
+This server includes ALL PyDoll features:
+- Complete browser session management (82 tools total)
+- Advanced tab operations and navigation
+- Full element interaction suite
+- Comprehensive event system with callbacks
+- Request interception and modification
+- Advanced element state checking
+- IFrame support and context management
+- Browser preferences configuration
+- File dialog handling
+- Cloudflare bypass automation
+- Network inspection and logging
+- Dialog management
+- JavaScript execution
+- Cookie and storage operations
+- Screenshot and PDF generation
+- Upload/download operations
+- Wait conditions and synchronization
+
+Environment Independent: Automatically detects PyDoll installation
+"""
+
+import asyncio
+import base64
+import json
+import logging
+import os
+import sys
+import tempfile
+import traceback
+from contextlib import asynccontextmanager
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Union, Callable
+
+# Auto-detect PyDoll installation and add to path
+def setup_pydoll_path():
+    """Auto-detect PyDoll installation and configure Python path"""
+    possible_paths = [
+        "/opt/pydoll_env/lib/python3.11/site-packages",
+        "/opt/pydoll_env/lib/python3.10/site-packages", 
+        "/opt/pydoll_env/lib/python3.9/site-packages",
+        "/usr/local/lib/python3.11/dist-packages",
+        "/usr/local/lib/python3.10/dist-packages",
+        "/usr/local/lib/python3.9/dist-packages",
+        os.path.expanduser("~/.local/lib/python3.11/site-packages"),
+        os.path.expanduser("~/.local/lib/python3.10/site-packages"),
+        os.path.expanduser("~/.local/lib/python3.9/site-packages"),
+    ]
+    
+    for path in possible_paths:
+        if os.path.exists(os.path.join(path, "pydoll")):
+            if path not in sys.path:
+                sys.path.insert(0, path)
+            print(f"Found PyDoll at: {path}", file=sys.stderr, flush=True)
+            return path
+    
+    # Try importing to see if already available
+    try:
+        import pydoll
+        print("PyDoll already available in Python path", file=sys.stderr, flush=True)
+        return "system"
+    except ImportError:
+        print("ERROR: PyDoll not found. Please install PyDoll first.", file=sys.stderr, flush=True)
+        sys.exit(1)
+
+# Setup PyDoll before importing
+setup_pydoll_path()
+
+# Ensure unbuffered output for JSON-RPC
+sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 1)
+sys.stderr = os.fdopen(sys.stderr.fileno(), 'w', 1)
+
+# Now import PyDoll
+try:
+    from pydoll.browser import Chrome
+    from pydoll.browser.options import ChromiumOptions
+    from pydoll.constants import Key, By
+    from pydoll.exceptions import *
+    from pydoll.protocol.network.types import ErrorReason
+    from pydoll.protocol.fetch.types import RequestStage, HeaderEntry
+except ImportError as e:
+    print(f"ERROR: Failed to import PyDoll: {e}", file=sys.stderr, flush=True)
+    sys.exit(1)
+
+# Server version
+__version__ = "3.0.0"
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Global session management
+BROWSER_SESSIONS: Dict[str, Chrome] = {}
+TAB_SESSIONS: Dict[str, Any] = {}
+ELEMENT_CACHE: Dict[str, Any] = {}
+EVENT_CALLBACKS: Dict[str, Dict[str, Any]] = {}
+EVENT_LOGS: Dict[str, List[Dict]] = {}
+NETWORK_LOGS: Dict[str, List[Any]] = {}
+
+# Default configuration - environment independent
+DEFAULT_CHROME_PATHS = [
+    "/usr/bin/google-chrome",
+    "/usr/bin/chromium-browser", 
+    "/usr/bin/chromium",
+    "/opt/google/chrome/chrome",
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",  # macOS
+    "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe",     # Windows
+    "C:\\Program Files (x86)\\Google\\Chrome\\Application\\chrome.exe"
+]
+
+def find_chrome_binary():
+    """Find Chrome binary across different environments"""
+    chrome_path = os.getenv('CHROME_PATH')
+    if chrome_path and os.path.exists(chrome_path):
+        return chrome_path
+    
+    for path in DEFAULT_CHROME_PATHS:
+        if os.path.exists(path):
+            return path
+    
+    # Try which/where command
+    import subprocess
+    try:
+        result = subprocess.run(['which', 'google-chrome'], capture_output=True, text=True)
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except:
+        pass
+    
+    try:
+        result = subprocess.run(['which', 'chromium'], capture_output=True, text=True)  
+        if result.returncode == 0 and result.stdout.strip():
+            return result.stdout.strip()
+    except:
+        pass
+    
+    return DEFAULT_CHROME_PATHS[0]  # Fallback
+
+DEFAULT_CHROME_PATH = find_chrome_binary()
+DISPLAY = os.getenv('DISPLAY', ':99')
+
+def send_response(response: Dict[str, Any]):
+    """Send a JSON-RPC response"""
+    print(json.dumps(response), flush=True)
+
+def create_success_response(text: str) -> Dict[str, Any]:
+    """Create a success response"""
+    return {
+        "content": [{"type": "text", "text": str(text)}]
+    }
+
+def create_error_response(text: str) -> Dict[str, Any]:
+    """Create an error response"""
+    return {
+        "content": [{"type": "text", "text": f"Error: {str(text)}"}]
+    }
+
+def create_json_response(data: Dict[str, Any]) -> Dict[str, Any]:
+    """Create a JSON data response"""
+    return {
+        "content": [{"type": "text", "text": json.dumps(data, indent=2)}]
+    }
+
+# Helper functions
+def get_browser_session(session_id: str):
+    """Get browser session by ID"""
+    return BROWSER_SESSIONS.get(session_id)
+
+def get_tab_session(tab_id: str):
+    """Get tab session by ID"""
+    return TAB_SESSIONS.get(tab_id)
+
+def get_element(element_id: str):
+    """Get element by ID"""
+    return ELEMENT_CACHE.get(element_id)
+
+def create_chrome_options(
+    headless: bool = True,
+    window_size: Optional[str] = None,
+    user_agent: Optional[str] = None,
+    proxy: Optional[str] = None,
+    disable_images: bool = False,
+    disable_javascript: bool = False,
+    additional_args: Optional[List[str]] = None,
+    chrome_path: Optional[str] = None
+) -> ChromiumOptions:
+    """Create Chrome options with specified configuration"""
+    options = ChromiumOptions()
+    
+    if chrome_path:
+        options.binary_location = chrome_path
+    elif DEFAULT_CHROME_PATH:
+        options.binary_location = DEFAULT_CHROME_PATH
+    
+    # Core configuration
+    if headless:
+        options.add_argument("--headless")
+    
+    if window_size:
+        options.add_argument(f"--window-size={window_size}")
+    else:
+        options.add_argument("--window-size=1920,1080")
+    
+    # Network configuration
+    if user_agent:
+        options.add_argument(f"--user-agent={user_agent}")
+    
+    if proxy:
+        options.add_argument(f"--proxy-server={proxy}")
+    
+    # Performance optimization
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage") 
+    options.add_argument("--disable-gpu")
+    options.add_argument("--disable-web-security")
+    options.add_argument("--disable-features=VizDisplayCompositor")
+    
+    # Content control
+    if disable_images:
+        options.add_argument("--blink-settings=imagesEnabled=false")
+    
+    if disable_javascript:
+        options.add_argument("--disable-javascript")
+    
+    if additional_args:
+        for arg in additional_args:
+            options.add_argument(arg)
+    
+    return options
+
+def handle_initialize(request_id: Any) -> Dict[str, Any]:
+    """Handle initialization"""
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "result": {
+            "protocolVersion": "2024-11-05",
+            "capabilities": {
+                "tools": {}
+            },
+            "serverInfo": {
+                "name": "pydoll-browser-complete",
+                "version": __version__
+            }
+        }
+    }
+
+def handle_tools_list(request_id: Any) -> Dict[str, Any]:
+    """List all 82 available tools"""
+    tools = [
+        # === BROWSER SESSION MANAGEMENT ===
+        {
+            "name": "create_browser_session",
+            "description": "Create a new Chrome browser instance with comprehensive configuration options",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string", "description": "Unique session identifier"},
+                    "headless": {"type": "boolean", "description": "Run browser in headless mode", "default": True},
+                    "window_size": {"type": "string", "description": "Browser window size (e.g., '1920,1080')"},
+                    "user_agent": {"type": "string", "description": "Custom user agent string"},
+                    "proxy": {"type": "string", "description": "Proxy server address"},
+                    "disable_images": {"type": "boolean", "description": "Disable image loading", "default": False},
+                    "disable_javascript": {"type": "boolean", "description": "Disable JavaScript execution", "default": False},
+                    "additional_args": {"type": "array", "items": {"type": "string"}, "description": "Additional Chrome arguments"},
+                    "chrome_path": {"type": "string", "description": "Path to Chrome executable"}
+                },
+                "required": ["session_id"]
+            }
+        },
+        {
+            "name": "start_browser_session",
+            "description": "Start an existing browser session and create initial tab",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string", "description": "Browser session identifier"}
+                },
+                "required": ["session_id"]
+            }
+        },
+        {
+            "name": "close_browser_session",
+            "description": "Close a browser session and cleanup resources",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "session_id": {"type": "string", "description": "Browser session identifier"}
+                },
+                "required": ["session_id"]
+            }
+        },
+
+        # === TAB MANAGEMENT ===
+        {
+            "name": "create_tab",
+            "description": "Create a new tab in browser session",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "browser_session_id": {"type": "string", "description": "Browser session identifier"},
+                    "tab_id": {"type": "string", "description": "Unique tab identifier"},
+                    "url": {"type": "string", "description": "Initial URL to navigate to"}
+                },
+                "required": ["browser_session_id", "tab_id"]
+            }
+        },
+        {
+            "name": "close_tab",
+            "description": "Close a browser tab",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tab_id": {"type": "string", "description": "Tab identifier"}
+                },
+                "required": ["tab_id"]
+            }
+        },
+        {
+            "name": "bring_tab_to_front",
+            "description": "Bring a tab to the front/focus",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tab_id": {"type": "string", "description": "Tab identifier"}
+                },
+                "required": ["tab_id"]
+            }
+        },
+
+        # === NAVIGATION ===
+        {
+            "name": "navigate",
+            "description": "Navigate tab to specified URL with page load waiting",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tab_id": {"type": "string", "description": "Tab identifier"},
+                    "url": {"type": "string", "description": "URL to navigate to"},
+                    "wait_until": {"type": "string", "description": "Wait condition (load, domcontentloaded, networkidle)", "default": "load"}
+                },
+                "required": ["tab_id", "url"]
+            }
+        },
+        {
+            "name": "go_back",
+            "description": "Navigate back in browser history",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tab_id": {"type": "string", "description": "Tab identifier"}
+                },
+                "required": ["tab_id"]
+            }
+        },
+        {
+            "name": "go_forward",
+            "description": "Navigate forward in browser history",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tab_id": {"type": "string", "description": "Tab identifier"}
+                },
+                "required": ["tab_id"]
+            }
+        },
+        {
+            "name": "refresh_page",
+            "description": "Refresh/reload the current page",
+            "inputSchema": {
+                "type": "object",
+                "properties": {
+                    "tab_id": {"type": "string", "description": "Tab identifier"},
+                    "ignore_cache": {"type": "boolean", "description": "Bypass cache during refresh", "default": False}
+                },
+                "required": ["tab_id"]
+            }
+        },
+
+        {
+                "name": "create_browser_session",
+                "description": "Create a new Chrome browser instance with comprehensive configuration options",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "close_browser_session",
+                "description": "Close a browser session and cleanup resources",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "create_tab",
+                "description": "Create a new tab in browser session",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "close_tab",
+                "description": "Close a browser tab",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "bring_tab_to_front",
+                "description": "Bring a tab to the front/focus",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "navigate",
+                "description": "Navigate tab to specified URL with page load waiting",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "go_back",
+                "description": "Navigate back in browser history",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "go_forward",
+                "description": "Navigate forward in browser history",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "refresh_page",
+                "description": "Refresh/reload the current page",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "find_element",
+                "description": "Find a single element using various selector strategies",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "find_elements",
+                "description": "Find multiple elements using selector strategy",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "click_element",
+                "description": "Click an element using mouse simulation",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "click_element_js",
+                "description": "Click element using JavaScript instead of mouse simulation",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "type_text",
+                "description": "Type text into an element",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "clear_text",
+                "description": "Clear text from an input element",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "press_key",
+                "description": "Press a specific key or key combination",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "key_down",
+                "description": "Press and hold a key (without releasing)",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "key_up",
+                "description": "Release a previously pressed key",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "hover_element",
+                "description": "Hover mouse over an element",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "scroll_element",
+                "description": "Scroll element into view or by specific amount",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "drag_and_drop",
+                "description": "Drag element from source to target location",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "get_element_text",
+                "description": "Get visible text content of an element",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "get_element_attribute",
+                "description": "Get attribute value from an element",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "get_element_property",
+                "description": "Get JavaScript property value from an element",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "get_element_html",
+                "description": "Get HTML content of an element",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "get_element_bounds",
+                "description": "Get element position and dimensions",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "get_element_bounds_js",
+                "description": "Get element bounds using JavaScript method",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "is_element_visible",
+                "description": "Check if element is visible on page",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "is_element_enabled",
+                "description": "Check if element is enabled for interaction",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "is_element_selected",
+                "description": "Check if element is selected (checkboxes, radio buttons)",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "is_element_on_top",
+                "description": "Check if element is on top (not covered by other elements)",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "is_element_interactable",
+                "description": "Check if element is fully interactable (visible, enabled, on top)",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "get_parent_element",
+                "description": "Get parent element of specified element",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "get_child_elements",
+                "description": "Get child elements of specified element",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "get_sibling_elements",
+                "description": "Get sibling elements of specified element",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "element_wait_until",
+                "description": "Wait for an element to meet specific conditions",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "wait_for_element",
+                "description": "Wait for element to appear using selector",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "execute_script",
+                "description": "Execute JavaScript in page context",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "execute_script_on_element",
+                "description": "Execute JavaScript with element as context",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "get_page_title",
+                "description": "Get the current page title",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "get_page_url",
+                "description": "Get the current page URL",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "get_page_source",
+                "description": "Get the current page HTML source",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "take_screenshot",
+                "description": "Take screenshot of page or element",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "save_pdf",
+                "description": "Save page as PDF document",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "make_request",
+                "description": "Make HTTP request using browser context",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "set_cookies",
+                "description": "Set cookies for current domain",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "get_cookies",
+                "description": "Get cookies from current domain or specific URLs",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "delete_cookies",
+                "description": "Delete specific cookies or all cookies",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "upload_file",
+                "description": "Upload files through file input elements",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "download_file",
+                "description": "Download files from URLs",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "expect_file_chooser",
+                "description": "Handle file chooser dialogs with automatic file selection",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "enable_file_chooser_intercept",
+                "description": "Enable file chooser dialog interception",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "disable_file_chooser_intercept",
+                "description": "Disable file chooser dialog interception",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "wait_for_page_load",
+                "description": "Wait for page to finish loading",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "wait_for_function",
+                "description": "Wait for JavaScript function to return truthy value",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "bypass_cloudflare",
+                "description": "Bypass Cloudflare protection automatically",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "enable_auto_solve_cloudflare",
+                "description": "Enable automatic Cloudflare captcha solving in background",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "disable_auto_solve_cloudflare",
+                "description": "Disable automatic Cloudflare captcha solving",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "expect_and_bypass_cloudflare",
+                "description": "Use context manager approach for Cloudflare bypass with waiting",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "handle_alert",
+                "description": "Handle JavaScript alert, confirm, or prompt dialogs",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "has_dialog",
+                "description": "Check if there is an active dialog on the page",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "get_dialog_message",
+                "description": "Get the message text from an active dialog",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "enable_page_events",
+                "description": "Enable page event monitoring (load, navigation, dialogs)",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "enable_network_events",
+                "description": "Enable network event monitoring for request tracking",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "enable_fetch_events",
+                "description": "Enable fetch event monitoring for request interception",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "enable_dom_events",
+                "description": "Enable DOM event monitoring",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "enable_runtime_events",
+                "description": "Enable runtime event monitoring (console, exceptions)",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "disable_all_events",
+                "description": "Disable all event monitoring for a tab",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "register_event_callback",
+                "description": "Register callback for specific browser events",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "remove_event_callback",
+                "description": "Remove a specific event callback",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "clear_event_callbacks",
+                "description": "Clear all event callbacks for a tab",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "get_event_logs",
+                "description": "Get captured event logs from a tab",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "continue_request",
+                "description": "Continue an intercepted request with optional modifications",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "fail_request",
+                "description": "Fail an intercepted request with specified error",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "fulfill_request",
+                "description": "Fulfill an intercepted request with custom response",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "get_network_response_body",
+                "description": "Get the response body for a specific network request",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "get_network_logs",
+                "description": "Get network request logs with optional filtering",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "get_frame",
+                "description": "Get frame context from an iframe element for automation",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "set_browser_preferences",
+                "description": "Set advanced Chrome browser preferences for existing session",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "list_sessions",
+                "description": "List all active browser and tab sessions",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "get_session_info",
+                "description": "Get detailed information about a specific session",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        },
+        {
+                "name": "cleanup_elements",
+                "description": "Clean up cached element references",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {},
+                        "required": []
+                }
+        }
+   
+    ]
+    
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "result": {
+            "tools": tools
+        }
+    }
+
+# Global event loop for the server
+SERVER_LOOP = None
+
+# Create a tool dispatcher mapping for easier maintenance
+TOOL_HANDLERS = {
+    "create_browser_session": create_browser_session,
+    "start_browser_session": start_browser_session,
+    "close_browser_session": close_browser_session,
+    "create_tab": create_tab,
+    "close_tab": close_tab,
+    "bring_tab_to_front": bring_tab_to_front,
+    "navigate": navigate,
+    "go_back": go_back,
+    "go_forward": go_forward,
+    "refresh_page": refresh_page,
+    "find_element": find_element,
+    "find_elements": find_elements,
+    "click_element": click_element,
+    "click_element_js": click_element_js,
+    "type_text": type_text,
+    "clear_text": clear_text,
+    "press_key": press_key,
+    "key_down": key_down,
+    "key_up": key_up,
+    "hover_element": hover_element,
+    "scroll_element": scroll_element,
+    "drag_and_drop": drag_and_drop,
+    "get_element_text": get_element_text,
+    "get_element_attribute": get_element_attribute,
+    "get_element_property": get_element_property,
+    "get_element_html": get_element_html,
+    "get_element_bounds": get_element_bounds,
+    "get_element_bounds_js": get_element_bounds_js,
+    "is_element_visible": is_element_visible,
+    "is_element_enabled": is_element_enabled,
+    "is_element_selected": is_element_selected,
+    "is_element_on_top": is_element_on_top,
+    "is_element_interactable": is_element_interactable,
+    "get_parent_element": get_parent_element,
+    "get_child_elements": get_child_elements,
+    "get_sibling_elements": get_sibling_elements,
+    "element_wait_until": element_wait_until,
+    "wait_for_element": wait_for_element,
+    "execute_script": execute_script,
+    "execute_script_on_element": execute_script_on_element,
+    "get_page_title": get_page_title,
+    "get_page_url": get_page_url,
+    "get_page_source": get_page_source,
+    "take_screenshot": take_screenshot,
+    "save_pdf": save_pdf,
+    "make_request": make_request,
+    "set_cookies": set_cookies,
+    "get_cookies": get_cookies,
+    "delete_cookies": delete_cookies,
+    "upload_file": upload_file,
+    "download_file": download_file,
+    "expect_file_chooser": expect_file_chooser,
+    "enable_file_chooser_intercept": enable_file_chooser_intercept,
+    "disable_file_chooser_intercept": disable_file_chooser_intercept,
+    "wait_for_page_load": wait_for_page_load,
+    "wait_for_function": wait_for_function,
+    "bypass_cloudflare": bypass_cloudflare,
+    "enable_auto_solve_cloudflare": enable_auto_solve_cloudflare,
+    "disable_auto_solve_cloudflare": disable_auto_solve_cloudflare,
+    "expect_and_bypass_cloudflare": expect_and_bypass_cloudflare,
+    "handle_alert": handle_alert,
+    "has_dialog": has_dialog,
+    "get_dialog_message": get_dialog_message,
+    "enable_page_events": enable_page_events,
+    "enable_network_events": enable_network_events,
+    "enable_fetch_events": enable_fetch_events,
+    "enable_dom_events": enable_dom_events,
+    "enable_runtime_events": enable_runtime_events,
+    "disable_all_events": disable_all_events,
+    "register_event_callback": register_event_callback,
+    "remove_event_callback": remove_event_callback,
+    "clear_event_callbacks": clear_event_callbacks,
+    "get_event_logs": get_event_logs,
+    "continue_request": continue_request,
+    "fail_request": fail_request,
+    "fulfill_request": fulfill_request,
+    "get_network_response_body": get_network_response_body,
+    "get_network_logs": get_network_logs,
+    "get_frame": get_frame,
+    "set_browser_preferences": set_browser_preferences,
+    "list_sessions": list_sessions,
+    "get_session_info": get_session_info,
+    "cleanup_elements": cleanup_elements,
+}
+
+async def handle_tool_call_async(request_id: Any, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """Handle tool calls asynchronously with proper timeout handling"""
+    try:
+        if tool_name not in TOOL_HANDLERS:
+            result = create_error_response(f"Unknown tool: {tool_name}")
+        else:
+            # Use timeout for all operations to prevent hanging
+            timeout = 60  # 60 second timeout for operations
+            handler = TOOL_HANDLERS[tool_name]
+            
+            try:
+                result = await asyncio.wait_for(handler(**arguments), timeout=timeout)
+            except asyncio.TimeoutError:
+                result = create_error_response(f"Operation '{tool_name}' timed out after {timeout} seconds")
+            except Exception as e:
+                result = create_error_response(f"Operation '{tool_name}' failed: {str(e)}")
+        
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "result": result
+        }
+        
+    except Exception as e:
+        error_message = f"Error executing {tool_name}: {str(e)}"
+        logger.error(f"{error_message}\n{traceback.format_exc()}")
+        return {
+            "jsonrpc": "2.0",
+            "id": request_id,
+            "error": {
+                "code": -1,
+                "message": error_message
+            }
+        }
+
+def handle_tool_call(request_id: Any, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
+    """Synchronous wrapper that runs the async handler in the server loop"""
+    global SERVER_LOOP
+    if SERVER_LOOP is None:
+        # Fallback to creating a new loop if none exists
+        return asyncio.run(handle_tool_call_async(request_id, tool_name, arguments))
+    else:
+        # Schedule the async call in the main server loop
+        future = asyncio.run_coroutine_threadsafe(
+            handle_tool_call_async(request_id, tool_name, arguments), 
+            SERVER_LOOP
+        )
+        return future.result(timeout=120)  # 2 minute timeout for the entire operation
+
+# ===== TOOL IMPLEMENTATIONS =====
+
+# === BROWSER SESSION MANAGEMENT ===
+
+async def create_browser_session(
+    session_id: str,
+    headless: bool = True,
+    window_size: Optional[str] = None,
+    user_agent: Optional[str] = None,
+    proxy: Optional[str] = None,
+    disable_images: bool = False,
+    disable_javascript: bool = False,
+    additional_args: Optional[List[str]] = None,
+    chrome_path: Optional[str] = None
+) -> Dict[str, Any]:
+    """Create a new Chrome browser instance"""
+    try:
+        if session_id in BROWSER_SESSIONS:
+            return create_error_response(f"Browser session '{session_id}' already exists")
+        
+        options = create_chrome_options(
+            headless=headless,
+            window_size=window_size,
+            user_agent=user_agent,
+            proxy=proxy,
+            disable_images=disable_images,
+            disable_javascript=disable_javascript,
+            additional_args=additional_args,
+            chrome_path=chrome_path
+        )
+        
+        # Create Chrome browser instance (but don't start yet)
+        browser = Chrome(options=options)
+        BROWSER_SESSIONS[session_id] = browser
+        
+        return create_success_response(f"Browser session '{session_id}' created (not started yet - call start_browser to initialize)")
+        
+    except Exception as e:
+        return create_error_response(f"Failed to create browser session: {str(e)}")
+
+async def start_browser_session(session_id: str) -> Dict[str, Any]:
+    """Start an existing browser session"""
+    try:
+        if session_id not in BROWSER_SESSIONS:
+            return create_error_response(f"Browser session '{session_id}' not found")
+        
+        browser = BROWSER_SESSIONS[session_id]
+        
+        # Start the browser and get initial tab
+        try:
+            logger.info(f"Starting browser for session {session_id}")
+            initial_tab = await asyncio.wait_for(browser.start(), timeout=60)
+            logger.info(f"Browser started successfully for session {session_id}")
+            
+            # Store the initial tab
+            initial_tab_id = f"{session_id}_initial"
+            TAB_SESSIONS[initial_tab_id] = initial_tab
+            logger.info(f"Initial tab stored with ID {initial_tab_id}")
+            
+            return create_success_response(f"Browser session '{session_id}' started with initial tab '{initial_tab_id}'")
+            
+        except asyncio.TimeoutError:
+            logger.error(f"Browser start timed out for session {session_id}")
+            return create_error_response("Browser start timed out after 60 seconds")
+        except Exception as e:
+            logger.error(f"Browser start failed for session {session_id}: {e}")
+            return create_error_response(f"Browser start failed: {str(e)}")
+            
+    except Exception as e:
+        return create_error_response(f"Failed to start browser session: {str(e)}")
+
+async def close_browser_session(session_id: str) -> Dict[str, Any]:
+    """Close a browser session and cleanup resources"""
+    try:
+        browser = get_browser_session(session_id)
+        if not browser:
+            return create_error_response(f"Browser session '{session_id}' not found")
+        
+        # Clean up related tabs and elements
+        tabs_to_remove = [tab_id for tab_id, tab in TAB_SESSIONS.items() 
+                          if hasattr(tab, 'browser') and tab.browser == browser]
+        for tab_id in tabs_to_remove:
+            del TAB_SESSIONS[tab_id]
+        
+        # Clean up elements for this browser
+        elements_to_remove = [elem_id for elem_id, elem in ELEMENT_CACHE.items()
+                              if hasattr(elem, 'tab') and elem.tab in tabs_to_remove]
+        for elem_id in elements_to_remove:
+            del ELEMENT_CACHE[elem_id]
+        
+        await browser.stop()
+        del BROWSER_SESSIONS[session_id]
+        
+        return create_success_response(f"Browser session '{session_id}' closed successfully")
+        
+    except Exception as e:
+        return create_error_response(f"Failed to close browser session: {str(e)}")
+
+# === TAB MANAGEMENT ===
+
+
+
+
+# === NAVIGATION ===
+
+async def navigate(tab_id: str, url: str, wait_until: str = "load") -> Dict[str, Any]:
+    """Navigate tab to specified URL with page load waiting"""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            return create_error_response(f"Tab '{tab_id}' not found")
+        
+        await tab.get(url, wait=wait_until)
+        
+        return create_success_response(f"Successfully navigated to {url}")
+        
+    except Exception as e:
+        return create_error_response(f"Failed to navigate: {str(e)}")
+
+async def go_back(tab_id: str) -> Dict[str, Any]:
+    """Navigate back in browser history"""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            return create_error_response(f"Tab '{tab_id}' not found")
+        
+        tab.back()
+        
+        return create_success_response("Navigated back successfully")
+        
+    except Exception as e:
+        return create_error_response(f"Failed to navigate back: {str(e)}")
+
+async def go_forward(tab_id: str) -> Dict[str, Any]:
+    """Navigate forward in browser history"""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            return create_error_response(f"Tab '{tab_id}' not found")
+        
+        tab.forward()
+        
+        return create_success_response("Navigated forward successfully")
+        
+    except Exception as e:
+        return create_error_response(f"Failed to navigate forward: {str(e)}")
+
+async def refresh_page(tab_id: str, ignore_cache: bool = False) -> Dict[str, Any]:
+    """Refresh/reload the current page"""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            return create_error_response(f"Tab '{tab_id}' not found")
+        
+        tab.reload(ignore_cache=ignore_cache)
+        
+        return create_success_response("Page refreshed successfully")
+        
+    except Exception as e:
+        return create_error_response(f"Failed to refresh page: {str(e)}")
+
+async def create_browser_session(
+    session_id: str,
+    headless: bool = True,
+    window_size: Optional[str] = None,
+    user_agent: Optional[str] = None,
+    proxy: Optional[str] = None,
+    disable_images: bool = False,
+    disable_javascript: bool = False,
+    additional_args: Optional[List[str]] = None,
+    chrome_path: Optional[str] = None
+):
+    """Create a new Chrome browser session."""
+    try:
+        if session_id in BROWSER_SESSIONS:
+            raise ValueError(f"Session '{session_id}' already exists")
+        
+        options = create_chrome_options(
+            headless=headless,
+            window_size=window_size,
+            user_agent=user_agent,
+            proxy=proxy,
+            disable_images=disable_images,
+            disable_javascript=disable_javascript,
+            additional_args=additional_args,
+            chrome_path=chrome_path
+        )
+        
+        browser = Chrome(options=options)
+        await browser.start()
+        
+        BROWSER_SESSIONS[session_id] = browser
+        
+        return create_success_response(f"Browser session '{session_id}' created successfully")
+    except Exception as e:
+        return create_error_response(f"Failed to create browser session: {str(e)}")
+
+async def close_browser_session(session_id: str):
+    """Close a browser session and cleanup resources."""
+    try:
+        if session_id not in BROWSER_SESSIONS:
+            raise ValueError(f"Session '{session_id}' not found")
+        
+        browser = BROWSER_SESSIONS[session_id]
+        await browser.stop()
+        
+        # Clean up related tabs
+        tabs_to_remove = [tab_id for tab_id in TAB_SESSIONS.keys() if tab_id.startswith(f"{session_id}_")]
+        for tab_id in tabs_to_remove:
+            del TAB_SESSIONS[tab_id]
+            if tab_id in EVENT_CALLBACKS:
+                del EVENT_CALLBACKS[tab_id]
+            if tab_id in EVENT_LOGS:
+                del EVENT_LOGS[tab_id]
+            if tab_id in NETWORK_LOGS:
+                del NETWORK_LOGS[tab_id]
+        
+        del BROWSER_SESSIONS[session_id]
+        
+        return create_success_response(f"Browser session '{session_id}' closed successfully")
+    except Exception as e:
+        return create_error_response(f"Failed to close browser session: {str(e)}")
+
+async def create_tab(browser_session_id: str, tab_id: str, url: Optional[str] = None):
+    """Create a new tab in browser session."""
+    try:
+        if browser_session_id not in BROWSER_SESSIONS:
+            raise ValueError(f"Browser session '{browser_session_id}' not found")
+        
+        if tab_id in TAB_SESSIONS:
+            raise ValueError(f"Tab '{tab_id}' already exists")
+        
+        browser = BROWSER_SESSIONS[browser_session_id]
+        
+        # Check if browser has been started - if not, start it first
+        if not hasattr(browser, '_browser_process_manager') or not browser._browser_process_manager._process:
+            logger.info(f"Browser {browser_session_id} not started yet, starting it now")
+            initial_tab = await asyncio.wait_for(browser.start(), timeout=60)
+            
+            # Store the initial tab if we don't already have tabs for this session
+            existing_tabs = [tid for tid in TAB_SESSIONS.keys() if tid.startswith(f"{browser_session_id}_")]
+            if not existing_tabs:
+                initial_tab_id = f"{browser_session_id}_initial"
+                TAB_SESSIONS[initial_tab_id] = initial_tab
+                logger.info(f"Initial tab stored with ID {initial_tab_id}")
+        
+        # Create new tab with timeout
+        tab = await asyncio.wait_for(browser.new_tab(url or ""), timeout=30)
+        TAB_SESSIONS[tab_id] = tab
+        
+        return create_success_response(f"Tab '{tab_id}' created successfully" + (f" and navigated to {url}" if url else ""))
+    except asyncio.TimeoutError:
+        return create_error_response(f"Failed to create tab: Operation timed out")
+    except Exception as e:
+        return create_error_response(f"Failed to create tab: {str(e)}")
+
+async def close_tab(tab_id: str):
+    """Close a browser tab."""
+    try:
+        if tab_id not in TAB_SESSIONS:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        tab = TAB_SESSIONS[tab_id]
+        await tab.close()
+        
+        # Clean up related elements and events
+        elements_to_remove = [elem_id for elem_id in ELEMENT_CACHE.keys() if elem_id.startswith(f"{tab_id}_")]
+        for elem_id in elements_to_remove:
+            del ELEMENT_CACHE[elem_id]
+        
+        if tab_id in EVENT_CALLBACKS:
+            del EVENT_CALLBACKS[tab_id]
+        if tab_id in EVENT_LOGS:
+            del EVENT_LOGS[tab_id]
+        if tab_id in NETWORK_LOGS:
+            del NETWORK_LOGS[tab_id]
+        
+        del TAB_SESSIONS[tab_id]
+        
+        return create_success_response(f"Tab '{tab_id}' closed successfully")
+    except Exception as e:
+        return create_error_response(f"Failed to close tab: {str(e)}")
+
+async def bring_tab_to_front(tab_id: str):
+    """Bring a tab to the front/focus."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        await tab.bring_to_front()
+        
+        return create_success_response(f"Tab '{tab_id}' brought to front")
+    except Exception as e:
+        return create_error_response(f"Bring tab to front failed: {str(e)}")
+
+async def navigate(tab_id: str, url: str, wait_until: str = "load"):
+    """Navigate tab to specified URL."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        await tab.go_to(url, wait_until=wait_until)
+        
+        return create_success_response(f"Successfully navigated to {url}")
+    except Exception as e:
+        return create_error_response(f"Navigation failed: {str(e)}")
+
+async def go_back(tab_id: str):
+    """Navigate back in browser history."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        await tab.go_back()
+        
+        return create_success_response("Successfully navigated back")
+    except Exception as e:
+        return create_error_response(f"Go back failed: {str(e)}")
+
+async def go_forward(tab_id: str):
+    """Navigate forward in browser history."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        await tab.go_forward()
+        
+        return create_success_response("Successfully navigated forward")
+    except Exception as e:
+        return create_error_response(f"Go forward failed: {str(e)}")
+
+async def refresh_page(tab_id: str, ignore_cache: bool = False):
+    """Refresh/reload the current page."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        await tab.refresh(ignore_cache=ignore_cache)
+        
+        return create_success_response("Page refreshed successfully")
+    except Exception as e:
+        return create_error_response(f"Page refresh failed: {str(e)}")
+
+async def find_element(
+    tab_id: str,
+    element_id: str,
+    selector_type: str,
+    selector_value: str,
+    timeout: float = 10
+):
+    """Find a single element using various selector strategies."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        if element_id in ELEMENT_CACHE:
+            raise ValueError(f"Element ID '{element_id}' already exists")
+        
+        # Map selector types to PyDoll By constants
+        selector_map = {
+            "css": By.CSS_SELECTOR,
+            "xpath": By.XPATH,
+            "id": By.ID,
+            "name": By.NAME,
+            "tag": By.TAG_NAME,
+            "class": By.CLASS_NAME,
+            "link_text": By.LINK_TEXT,
+            "partial_link_text": By.PARTIAL_LINK_TEXT
+        }
+        
+        if selector_type not in selector_map:
+            raise ValueError(f"Invalid selector type: {selector_type}")
+        
+        by_type = selector_map[selector_type]
+        element = await tab.find_element(by_type, selector_value, timeout=timeout)
+        
+        ELEMENT_CACHE[element_id] = element
+        
+        return create_success_response(f"Element '{element_id}' found successfully")
+    except Exception as e:
+        return create_error_response(f"Find element failed: {str(e)}")
+
+async def find_elements(
+    tab_id: str,
+    base_element_id: str,
+    selector_type: str,
+    selector_value: str,
+    limit: Optional[int] = None
+):
+    """Find multiple elements using selector strategy."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        # Map selector types to PyDoll By constants
+        selector_map = {
+            "css": By.CSS_SELECTOR,
+            "xpath": By.XPATH,
+            "id": By.ID,
+            "name": By.NAME,
+            "tag": By.TAG_NAME,
+            "class": By.CLASS_NAME,
+            "link_text": By.LINK_TEXT,
+            "partial_link_text": By.PARTIAL_LINK_TEXT
+        }
+        
+        if selector_type not in selector_map:
+            raise ValueError(f"Invalid selector type: {selector_type}")
+        
+        by_type = selector_map[selector_type]
+        elements = await tab.find_elements(by_type, selector_value)
+        
+        if limit:
+            elements = elements[:limit]
+        
+        element_ids = []
+        for i, element in enumerate(elements):
+            element_id = f"{base_element_id}_{i}"
+            ELEMENT_CACHE[element_id] = element
+            element_ids.append(element_id)
+        
+        return create_success_response(f"Found {len(element_ids)} elements: {', '.join(element_ids)}")
+    except Exception as e:
+        return create_error_response(f"Find elements failed: {str(e)}")
+
+async def click_element(element_id: str, button: str = "left", click_count: int = 1):
+    """Click an element using mouse simulation."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        if click_count == 1:
+            if button == "right":
+                await element.right_click()
+            else:
+                await element.click()
+        else:
+            await element.double_click() if click_count == 2 else await element.click()
+        
+        return create_success_response(f"Element '{element_id}' clicked successfully")
+    except Exception as e:
+        return create_error_response(f"Click element failed: {str(e)}")
+
+async def click_element_js(element_id: str):
+    """Click element using JavaScript instead of mouse simulation."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        await element.click_using_js()
+        
+        return create_success_response(f"Element '{element_id}' clicked using JavaScript")
+    except Exception as e:
+        return create_error_response(f"Click element JS failed: {str(e)}")
+
+async def type_text(element_id: str, text: str, clear_first: bool = False, delay: int = 0):
+    """Type text into an element."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        if clear_first:
+            await element.clear()
+        
+        if delay > 0:
+            await element.type_text(text, delay=delay)
+        else:
+            await element.type(text)
+        
+        return create_success_response(f"Successfully typed text into element '{element_id}'")
+    except Exception as e:
+        return create_error_response(f"Type text failed: {str(e)}")
+
+async def clear_text(element_id: str):
+    """Clear text from an input element."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        await element.clear()
+        
+        return create_success_response(f"Element '{element_id}' cleared successfully")
+    except Exception as e:
+        return create_error_response(f"Clear text failed: {str(e)}")
+
+async def press_key(key: str, element_id: Optional[str] = None, modifiers: Optional[List[str]] = None):
+    """Press a specific key or key combination."""
+    try:
+        # Convert key string to Key enum if available
+        key_obj = getattr(Key, key.upper()) if hasattr(Key, key.upper()) else key
+        
+        if element_id:
+            element = get_element(element_id)
+            if not element:
+                raise ValueError(f"Element '{element_id}' not found")
+            await element.press_key(key_obj)
+        else:
+            # Page-level key press - need tab context
+            raise ValueError("Page-level key press requires tab context - use element_id")
+        
+        return create_success_response(f"Key '{key}' pressed successfully")
+    except Exception as e:
+        return create_error_response(f"Press key failed: {str(e)}")
+
+async def key_down(element_id: str, key: str, modifiers: Optional[List[str]] = None):
+    """Press and hold a key (without releasing)."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        key_obj = getattr(Key, key.upper()) if hasattr(Key, key.upper()) else key
+        
+        await element.key_down(key_obj)
+        
+        return create_success_response(f"Key '{key}' pressed down")
+    except Exception as e:
+        return create_error_response(f"Key down failed: {str(e)}")
+
+async def key_up(element_id: str, key: str):
+    """Release a previously pressed key."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        key_obj = getattr(Key, key.upper()) if hasattr(Key, key.upper()) else key
+        
+        await element.key_up(key_obj)
+        
+        return create_success_response(f"Key '{key}' released")
+    except Exception as e:
+        return create_error_response(f"Key up failed: {str(e)}")
+
+async def hover_element(element_id: str):
+    """Hover mouse over an element."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        await element.hover()
+        
+        return create_success_response(f"Element '{element_id}' hovered successfully")
+    except Exception as e:
+        return create_error_response(f"Hover element failed: {str(e)}")
+
+async def scroll_element(
+    element_id: str,
+    x: Optional[int] = None,
+    y: Optional[int] = None,
+    behavior: str = "auto"
+):
+    """Scroll element into view or by specific amount."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        if x is not None or y is not None:
+            await element.scroll_by(x or 0, y or 0)
+        else:
+            await element.scroll_into_view()
+        
+        return create_success_response(f"Element '{element_id}' scrolled successfully")
+    except Exception as e:
+        return create_error_response(f"Scroll element failed: {str(e)}")
+
+async def drag_and_drop(
+    source_element_id: str,
+    target_element_id: str,
+    x_offset: Optional[int] = None,
+    y_offset: Optional[int] = None
+):
+    """Drag element from source to target location."""
+    try:
+        source_element = get_element(source_element_id)
+        target_element = get_element(target_element_id)
+        
+        if not source_element:
+            raise ValueError(f"Source element '{source_element_id}' not found")
+        if not target_element:
+            raise ValueError(f"Target element '{target_element_id}' not found")
+        
+        await source_element.drag_and_drop(target_element)
+        
+        return create_success_response(f"Drag and drop from '{source_element_id}' to '{target_element_id}' completed")
+    except Exception as e:
+        return create_error_response(f"Drag and drop failed: {str(e)}")
+
+async def get_element_text(element_id: str):
+    """Get visible text content of an element."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        text = await element.text
+        
+        return create_success_response(text or "")
+    except Exception as e:
+        return create_error_response(f"Get element text failed: {str(e)}")
+
+async def get_element_attribute(element_id: str, attribute_name: str):
+    """Get attribute value from an element."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        value = await element.get_attribute(attribute_name)
+        
+        return create_success_response(str(value) if value is not None else "")
+    except Exception as e:
+        return create_error_response(f"Get element attribute failed: {str(e)}")
+
+async def get_element_property(element_id: str, property_name: str):
+    """Get JavaScript property value from an element."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        value = await element.get_property(property_name)
+        
+        return create_success_response(str(value) if value is not None else "")
+    except Exception as e:
+        return create_error_response(f"Get element property failed: {str(e)}")
+
+async def get_element_html(element_id: str, outer_html: bool = False):
+    """Get HTML content of an element."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        if outer_html:
+            html = await element.outer_html
+        else:
+            html = await element.inner_html
+        
+        return create_success_response(html or "")
+    except Exception as e:
+        return create_error_response(f"Get element HTML failed: {str(e)}")
+
+async def get_element_bounds(element_id: str):
+    """Get element position and dimensions."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        bounds = await element.bounds()
+        
+        return create_success_response(json.dumps(bounds, indent=2))
+    except Exception as e:
+        return create_error_response(f"Get element bounds failed: {str(e)}")
+
+async def get_element_bounds_js(element_id: str):
+    """Get element bounds using JavaScript method."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        bounds = await element.get_bounds_using_js()
+        
+        return create_success_response(json.dumps(bounds, indent=2))
+    except Exception as e:
+        return create_error_response(f"Get element bounds JS failed: {str(e)}")
+
+async def is_element_visible(element_id: str):
+    """Check if element is visible on page."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        visible = await element.is_visible()
+        
+        return create_success_response(str(visible).lower())
+    except Exception as e:
+        return create_error_response(f"Check element visibility failed: {str(e)}")
+
+async def is_element_enabled(element_id: str):
+    """Check if element is enabled for interaction."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        enabled = element.is_enabled
+        
+        return create_success_response(str(enabled).lower())
+    except Exception as e:
+        return create_error_response(f"Check element enabled failed: {str(e)}")
+
+async def is_element_selected(element_id: str):
+    """Check if element is selected (checkboxes, radio buttons)."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        selected = await element.is_selected()
+        
+        return create_success_response(str(selected).lower())
+    except Exception as e:
+        return create_error_response(f"Check element selected failed: {str(e)}")
+
+async def is_element_on_top(element_id: str):
+    """Check if element is on top (not covered by other elements)."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        result = await element.is_on_top()
+        return create_success_response(str(result).lower())
+    except Exception as e:
+        return create_error_response(f"Check element on top failed: {str(e)}")
+
+async def is_element_interactable(element_id: str):
+    """Check if element is fully interactable (visible, enabled, on top)."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        result = await element.is_interactable()
+        return create_success_response(str(result).lower())
+    except Exception as e:
+        return create_error_response(f"Check element interactable failed: {str(e)}")
+
+async def get_parent_element(element_id: str, parent_element_id: str):
+    """Get parent element of specified element."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        if parent_element_id in ELEMENT_CACHE:
+            raise ValueError(f"Parent element ID '{parent_element_id}' already exists")
+        
+        parent = await element.parent_element
+        ELEMENT_CACHE[parent_element_id] = parent
+        
+        return create_success_response(f"Parent element stored as '{parent_element_id}'")
+    except Exception as e:
+        return create_error_response(f"Get parent element failed: {str(e)}")
+
+async def get_child_elements(element_id: str, base_child_id: str, selector: Optional[str] = None):
+    """Get child elements of specified element."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        if selector:
+            children = await element.find_elements(By.CSS_SELECTOR, selector)
+        else:
+            children = await element.child_elements
+        
+        child_ids = []
+        for i, child in enumerate(children):
+            child_id = f"{base_child_id}_{i}"
+            ELEMENT_CACHE[child_id] = child
+            child_ids.append(child_id)
+        
+        return create_success_response(f"Found {len(child_ids)} child elements: {', '.join(child_ids)}")
+    except Exception as e:
+        return create_error_response(f"Get child elements failed: {str(e)}")
+
+async def get_sibling_elements(
+    element_id: str,
+    base_sibling_id: str,
+    next_siblings: bool = True,
+    previous_siblings: bool = True
+):
+    """Get sibling elements of specified element."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        siblings = []
+        
+        if next_siblings:
+            next_sibs = await element.next_sibling_elements
+            siblings.extend(next_sibs)
+        
+        if previous_siblings:
+            prev_sibs = await element.previous_sibling_elements
+            siblings.extend(prev_sibs)
+        
+        sibling_ids = []
+        for i, sibling in enumerate(siblings):
+            sibling_id = f"{base_sibling_id}_{i}"
+            ELEMENT_CACHE[sibling_id] = sibling
+            sibling_ids.append(sibling_id)
+        
+        return create_success_response(f"Found {len(sibling_ids)} sibling elements: {', '.join(sibling_ids)}")
+    except Exception as e:
+        return create_error_response(f"Get sibling elements failed: {str(e)}")
+
+async def element_wait_until(
+    element_id: str,
+    is_visible: Optional[bool] = None,
+    is_interactable: Optional[bool] = None,
+    is_on_top: Optional[bool] = None,
+    timeout: float = 10
+):
+    """Wait for an element to meet specific conditions."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        await element.wait_until(
+            is_visible=is_visible,
+            is_interactable=is_interactable,
+            is_on_top=is_on_top,
+            timeout=timeout
+        )
+        
+        conditions = []
+        if is_visible is not None:
+            conditions.append(f"visible={is_visible}")
+        if is_interactable is not None:
+            conditions.append(f"interactable={is_interactable}")
+        if is_on_top is not None:
+            conditions.append(f"on_top={is_on_top}")
+        
+        return create_success_response(f"Element conditions met: {', '.join(conditions)}")
+    except Exception as e:
+        return create_error_response(f"Element wait until failed: {str(e)}")
+
+async def wait_for_element(
+    tab_id: str,
+    selector_type: str,
+    selector_value: str,
+    timeout: float = 10,
+    visible: bool = True
+):
+    """Wait for element to appear using selector."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        selector_map = {
+            "css": By.CSS_SELECTOR,
+            "xpath": By.XPATH,
+            "id": By.ID,
+            "name": By.NAME,
+            "tag": By.TAG_NAME,
+            "class": By.CLASS_NAME
+        }
+        
+        if selector_type not in selector_map:
+            raise ValueError(f"Invalid selector type: {selector_type}")
+        
+        by_type = selector_map[selector_type]
+        
+        if visible:
+            element = await tab.wait_for_element_visible(by_type, selector_value, timeout=timeout)
+        else:
+            element = await tab.wait_for_element(by_type, selector_value, timeout=timeout)
+        
+        return create_success_response(f"Element found using {selector_type}: {selector_value}")
+    except Exception as e:
+        return create_error_response(f"Wait for element failed: {str(e)}")
+
+async def execute_script(tab_id: str, script: str, args: Optional[List] = None):
+    """Execute JavaScript in page context."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        if args:
+            result = await tab.execute_script(script, *args)
+        else:
+            result = await tab.execute_script(script)
+        
+        return create_success_response(str(result) if result is not None else "null")
+    except Exception as e:
+        return create_error_response(f"Execute script failed: {str(e)}")
+
+async def execute_script_on_element(element_id: str, script: str, args: Optional[List] = None):
+    """Execute JavaScript with element as context."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        if args:
+            result = await element.execute_script(script, *args)
+        else:
+            result = await element.execute_script(script)
+        
+        return create_success_response(str(result) if result is not None else "null")
+    except Exception as e:
+        return create_error_response(f"Execute script on element failed: {str(e)}")
+
+async def get_page_title(tab_id: str):
+    """Get the current page title."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        title = await tab.title
+        
+        return create_success_response(title or "")
+    except Exception as e:
+        return create_error_response(f"Get page title failed: {str(e)}")
+
+async def get_page_url(tab_id: str):
+    """Get the current page URL."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        url = await tab.current_url
+        
+        return create_success_response(url or "")
+    except Exception as e:
+        return create_error_response(f"Get page URL failed: {str(e)}")
+
+async def get_page_source(tab_id: str):
+    """Get the current page HTML source."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        source = await tab.page_source
+        
+        return create_success_response(source or "")
+    except Exception as e:
+        return create_error_response(f"Get page source failed: {str(e)}")
+
+async def take_screenshot(
+    tab_id: str,
+    element_id: Optional[str] = None,
+    full_page: bool = False,
+    format: str = "png",
+    quality: int = 90
+):
+    """Take screenshot of page or element."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        if element_id:
+            element = get_element(element_id)
+            if not element:
+                raise ValueError(f"Element '{element_id}' not found")
+            screenshot_data = await element.screenshot()
+        else:
+            if full_page:
+                screenshot_data = await tab.screenshot_full_page()
+            else:
+                screenshot_data = await tab.screenshot()
+        
+        # Convert to base64 for transmission
+        screenshot_b64 = base64.b64encode(screenshot_data).decode('utf-8')
+        
+        return CallToolResult(
+            content=[
+                ImageContent(
+                    type="image",
+                    data=screenshot_b64,
+                    mimeType=f"image/{format}"
+                )
+            ],
+            isError=False
+        )
+    except Exception as e:
+        return create_error_response(f"Take screenshot failed: {str(e)}")
+
+async def save_pdf(
+    tab_id: str,
+    landscape: bool = False,
+    print_background: bool = False,
+    scale: float = 1.0,
+    page_ranges: Optional[str] = None
+):
+    """Save page as PDF document."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        pdf_data = await tab.print_to_pdf(
+            landscape=landscape,
+            print_background=print_background,
+            scale=scale,
+            page_ranges=page_ranges
+        )
+        
+        # Save to temporary file and return path
+        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp_file:
+            tmp_file.write(pdf_data)
+            pdf_path = tmp_file.name
+        
+        return create_success_response(f"PDF saved to: {pdf_path}")
+    except Exception as e:
+        return create_error_response(f"Save PDF failed: {str(e)}")
+
+async def make_request(
+    tab_id: str,
+    url: str,
+    method: str = "GET",
+    headers: Optional[Dict] = None,
+    data: Optional[str] = None,
+    json: Optional[Dict] = None,
+    timeout: int = 30
+):
+    """Make HTTP request using browser context."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        # Use tab's request object
+        request_obj = tab.request
+        
+        # Build request parameters
+        kwargs = {"timeout": timeout}
+        if headers:
+            kwargs["headers"] = headers
+        if json:
+            kwargs["json"] = json
+        elif data:
+            kwargs["data"] = data
+        
+        # Make request based on method
+        if method.upper() == "GET":
+            response = await request_obj.get(url, **kwargs)
+        elif method.upper() == "POST":
+            response = await request_obj.post(url, **kwargs)
+        elif method.upper() == "PUT":
+            response = await request_obj.put(url, **kwargs)
+        elif method.upper() == "DELETE":
+            response = await request_obj.delete(url, **kwargs)
+        elif method.upper() == "HEAD":
+            response = await request_obj.head(url, **kwargs)
+        elif method.upper() == "OPTIONS":
+            response = await request_obj.options(url, **kwargs)
+        elif method.upper() == "PATCH":
+            response = await request_obj.patch(url, **kwargs)
+        else:
+            raise ValueError(f"Unsupported HTTP method: {method}")
+        
+        result = {
+            "status_code": response.status_code,
+            "headers": dict(response.headers),
+            "text": response.text,
+            "url": str(response.url)
+        }
+        
+        return create_success_response(json.dumps(result, indent=2))
+    except Exception as e:
+        return create_error_response(f"Make request failed: {str(e)}")
+
+async def set_cookies(tab_id: str, cookies: List[Dict[str, Any]]):
+    """Set cookies for current domain."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        await tab.set_cookies(cookies)
+        
+        return create_success_response(f"Successfully set {len(cookies)} cookies")
+    except Exception as e:
+        return create_error_response(f"Set cookies failed: {str(e)}")
+
+async def get_cookies(tab_id: str, urls: Optional[List[str]] = None):
+    """Get cookies from current domain or specific URLs."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        if urls:
+            cookies = await tab.get_cookies(urls)
+        else:
+            cookies = await tab.get_cookies()
+        
+        return create_success_response(json.dumps(cookies, indent=2))
+    except Exception as e:
+        return create_error_response(f"Get cookies failed: {str(e)}")
+
+async def delete_cookies(
+    tab_id: str,
+    name: Optional[str] = None,
+    url: Optional[str] = None,
+    domain: Optional[str] = None,
+    path: Optional[str] = None
+):
+    """Delete specific cookies or all cookies."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        kwargs = {}
+        if name:
+            kwargs["name"] = name
+        if url:
+            kwargs["url"] = url
+        if domain:
+            kwargs["domain"] = domain
+        if path:
+            kwargs["path"] = path
+        
+        await tab.delete_cookies(**kwargs)
+        
+        return create_success_response("Cookies deleted successfully")
+    except Exception as e:
+        return create_error_response(f"Delete cookies failed: {str(e)}")
+
+async def upload_file(element_id: str, file_paths: List[str]):
+    """Upload files through file input elements."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        # Verify all files exist
+        for file_path in file_paths:
+            if not Path(file_path).exists():
+                raise FileNotFoundError(f"File not found: {file_path}")
+        
+        await element.set_files(file_paths)
+        
+        return create_success_response(f"Successfully uploaded {len(file_paths)} files")
+    except Exception as e:
+        return create_error_response(f"Upload file failed: {str(e)}")
+
+async def download_file(
+    tab_id: str,
+    url: str,
+    filename: Optional[str] = None,
+    directory: Optional[str] = None,
+    timeout: int = 300
+):
+    """Download files from URLs."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        # Use tab's request object to download
+        response = await tab.request.get(url, timeout=timeout)
+        
+        # Determine filename
+        if not filename:
+            filename = url.split('/')[-1] or 'download'
+        
+        # Determine directory
+        if not directory:
+            directory = tempfile.gettempdir()
+        
+        file_path = Path(directory) / filename
+        
+        # Write file
+        with open(file_path, 'wb') as f:
+            f.write(response.content)
+        
+        return create_success_response(f"File downloaded to: {file_path}")
+    except Exception as e:
+        return create_error_response(f"Download file failed: {str(e)}")
+
+async def expect_file_chooser(tab_id: str, file_paths: List[str], timeout: float = 30):
+    """Handle file chooser dialogs with automatic file selection."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        # Verify files exist
+        for file_path in file_paths:
+            if not Path(file_path).exists():
+                raise FileNotFoundError(f"File not found: {file_path}")
+        
+        async with tab.expect_file_chooser(timeout=timeout) as file_chooser:
+            await file_chooser.set_files(file_paths)
+        
+        return create_success_response(f"File chooser handled with {len(file_paths)} files")
+    except Exception as e:
+        return create_error_response(f"Expect file chooser failed: {str(e)}")
+
+async def enable_file_chooser_intercept(tab_id: str):
+    """Enable file chooser dialog interception."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        await tab.enable_intercept_file_chooser_dialog()
+        
+        return create_success_response("File chooser interception enabled")
+    except Exception as e:
+        return create_error_response(f"Enable file chooser intercept failed: {str(e)}")
+
+async def disable_file_chooser_intercept(tab_id: str):
+    """Disable file chooser dialog interception."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        await tab.disable_intercept_file_chooser_dialog()
+        
+        return create_success_response("File chooser interception disabled")
+    except Exception as e:
+        return create_error_response(f"Disable file chooser intercept failed: {str(e)}")
+
+async def wait_for_page_load(tab_id: str, wait_until: str = "load", timeout: int = 30):
+    """Wait for page to finish loading."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        await tab.wait_for_load_state(wait_until, timeout=timeout)
+        
+        return create_success_response(f"Page load completed ({wait_until})")
+    except Exception as e:
+        return create_error_response(f"Wait for page load failed: {str(e)}")
+
+async def wait_for_function(
+    tab_id: str,
+    script: str,
+    args: Optional[List] = None,
+    timeout: int = 30,
+    polling: int = 100
+):
+    """Wait for JavaScript function to return truthy value."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        result = await tab.wait_for_function(script, args, timeout=timeout, polling=polling)
+        
+        return create_success_response(str(result) if result is not None else "null")
+    except Exception as e:
+        return create_error_response(f"Wait for function failed: {str(e)}")
+
+async def bypass_cloudflare(tab_id: str, url: str, timeout: int = 30):
+    """Bypass Cloudflare protection automatically."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        await tab.bypass_cloudflare(url, timeout=timeout)
+        
+        return create_success_response(f"Cloudflare bypass completed for {url}")
+    except Exception as e:
+        return create_error_response(f"Cloudflare bypass failed: {str(e)}")
+
+async def enable_auto_solve_cloudflare(
+    tab_id: str,
+    custom_selector: Optional[str] = None,
+    time_before_click: float = 5
+):
+    """Enable automatic Cloudflare captcha solving in background."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        selector = None
+        if custom_selector:
+            selector = (By.CSS_SELECTOR, custom_selector)
+        
+        await tab.enable_auto_solve_cloudflare_captcha(
+            custom_selector=selector,
+            time_before_click=time_before_click
+        )
+        
+        return create_success_response("Auto-solve Cloudflare captcha enabled")
+    except Exception as e:
+        return create_error_response(f"Enable auto-solve Cloudflare failed: {str(e)}")
+
+async def disable_auto_solve_cloudflare(tab_id: str):
+    """Disable automatic Cloudflare captcha solving."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        await tab.disable_auto_solve_cloudflare_captcha()
+        
+        return create_success_response("Auto-solve Cloudflare captcha disabled")
+    except Exception as e:
+        return create_error_response(f"Disable auto-solve Cloudflare failed: {str(e)}")
+
+async def expect_and_bypass_cloudflare(
+    tab_id: str,
+    url: str,
+    custom_selector: Optional[str] = None,
+    time_before_click: float = 5,
+    timeout: float = 60
+):
+    """Use context manager approach for Cloudflare bypass with waiting."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        selector = None
+        if custom_selector:
+            selector = (By.CSS_SELECTOR, custom_selector)
+        
+        async with tab.expect_and_bypass_cloudflare_captcha(
+            custom_selector=selector,
+            time_before_click=time_before_click
+        ):
+            await tab.go_to(url)
+            await asyncio.sleep(timeout)
+        
+        return create_success_response(f"Cloudflare bypass completed for {url}")
+    except Exception as e:
+        return create_error_response(f"Expect and bypass Cloudflare failed: {str(e)}")
+
+async def handle_alert(tab_id: str, action: str = "accept", text: Optional[str] = None):
+    """Handle JavaScript alert, confirm, or prompt dialogs."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        if action == "accept":
+            await tab.accept_dialog(text)
+        elif action == "dismiss":
+            await tab.dismiss_dialog()
+        else:
+            raise ValueError(f"Invalid action: {action}")
+        
+        return create_success_response(f"Dialog {action}ed successfully")
+    except Exception as e:
+        return create_error_response(f"Handle alert failed: {str(e)}")
+
+async def has_dialog(tab_id: str):
+    """Check if there is an active dialog on the page."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        has_dialog = await tab.has_dialog()
+        
+        return create_success_response(str(has_dialog).lower())
+    except Exception as e:
+        return create_error_response(f"Check has dialog failed: {str(e)}")
+
+async def get_dialog_message(tab_id: str):
+    """Get the message text from an active dialog."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        message = await tab.get_dialog_message()
+        
+        return create_success_response(message or "")
+    except Exception as e:
+        return create_error_response(f"Get dialog message failed: {str(e)}")
+
+# === EVENT SYSTEM IMPLEMENTATIONS ===
+
+async def enable_page_events(tab_id: str):
+    """Enable page event monitoring."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        await tab.enable_page_events()
+        
+        return create_success_response("Page events enabled successfully")
+    except Exception as e:
+        return create_error_response(f"Enable page events failed: {str(e)}")
+
+async def enable_network_events(tab_id: str):
+    """Enable network event monitoring."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        await tab.enable_network_events()
+        
+        if tab_id not in NETWORK_LOGS:
+            NETWORK_LOGS[tab_id] = []
+        
+        return create_success_response("Network events enabled successfully")
+    except Exception as e:
+        return create_error_response(f"Enable network events failed: {str(e)}")
+
+async def enable_fetch_events(tab_id: str, patterns: Optional[List[str]] = None):
+    """Enable fetch event monitoring for request interception."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        if patterns:
+            await tab.enable_fetch_events(patterns=patterns)
+        else:
+            await tab.enable_fetch_events()
+        
+        return create_success_response(f"Fetch events enabled for {len(patterns) if patterns else 'all'} patterns")
+    except Exception as e:
+        return create_error_response(f"Enable fetch events failed: {str(e)}")
+
+async def enable_dom_events(tab_id: str):
+    """Enable DOM event monitoring."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        await tab.enable_dom_events()
+        
+        return create_success_response("DOM events enabled successfully")
+    except Exception as e:
+        return create_error_response(f"Enable DOM events failed: {str(e)}")
+
+async def enable_runtime_events(tab_id: str):
+    """Enable runtime event monitoring."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        await tab.enable_runtime_events()
+        
+        return create_success_response("Runtime events enabled successfully")
+    except Exception as e:
+        return create_error_response(f"Enable runtime events failed: {str(e)}")
+
+async def disable_all_events(tab_id: str):
+    """Disable all event monitoring for a tab."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        await tab.disable_page_events()
+        await tab.disable_network_events()
+        await tab.disable_fetch_events()
+        await tab.disable_dom_events()
+        await tab.disable_runtime_events()
+        
+        await tab.clear_callbacks()
+        
+        if tab_id in EVENT_CALLBACKS:
+            EVENT_CALLBACKS[tab_id] = {}
+        if tab_id in EVENT_LOGS:
+            EVENT_LOGS[tab_id] = []
+        if tab_id in NETWORK_LOGS:
+            NETWORK_LOGS[tab_id] = []
+        
+        return create_success_response("All event monitoring disabled")
+    except Exception as e:
+        return create_error_response(f"Disable all events failed: {str(e)}")
+
+async def register_event_callback(
+    tab_id: str,
+    callback_id: str,
+    event_type: str,
+    filter_pattern: Optional[str] = None
+):
+    """Register callback for specific browser events."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        if tab_id not in EVENT_CALLBACKS:
+            EVENT_CALLBACKS[tab_id] = {}
+        if tab_id not in EVENT_LOGS:
+            EVENT_LOGS[tab_id] = []
+        
+        def event_callback(event_data):
+            EVENT_LOGS[tab_id].append({
+                "callback_id": callback_id,
+                "event_type": event_type,
+                "timestamp": asyncio.get_event_loop().time(),
+                "data": event_data,
+                "filter_pattern": filter_pattern
+            })
+        
+        registered_callback_id = await tab.on(event_type, event_callback)
+        
+        EVENT_CALLBACKS[tab_id][callback_id] = {
+            "pydoll_callback_id": registered_callback_id,
+            "event_type": event_type,
+            "filter_pattern": filter_pattern
+        }
+        
+        return create_success_response(f"Event callback '{callback_id}' registered for '{event_type}'")
+    except Exception as e:
+        return create_error_response(f"Register event callback failed: {str(e)}")
+
+async def remove_event_callback(tab_id: str, callback_id: str):
+    """Remove a specific event callback."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        if tab_id not in EVENT_CALLBACKS or callback_id not in EVENT_CALLBACKS[tab_id]:
+            raise ValueError(f"Callback '{callback_id}' not found")
+        
+        callback_info = EVENT_CALLBACKS[tab_id][callback_id]
+        pydoll_callback_id = callback_info["pydoll_callback_id"]
+        
+        await tab.remove_callback(pydoll_callback_id)
+        
+        del EVENT_CALLBACKS[tab_id][callback_id]
+        
+        return create_success_response(f"Event callback '{callback_id}' removed successfully")
+    except Exception as e:
+        return create_error_response(f"Remove event callback failed: {str(e)}")
+
+async def clear_event_callbacks(tab_id: str):
+    """Clear all event callbacks for a tab."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        await tab.clear_callbacks()
+        
+        if tab_id in EVENT_CALLBACKS:
+            EVENT_CALLBACKS[tab_id] = {}
+        if tab_id in EVENT_LOGS:
+            EVENT_LOGS[tab_id] = []
+        
+        return create_success_response("All event callbacks cleared successfully")
+    except Exception as e:
+        return create_error_response(f"Clear event callbacks failed: {str(e)}")
+
+async def get_event_logs(tab_id: str, event_type: Optional[str] = None, limit: int = 100):
+    """Get captured event logs."""
+    try:
+        if tab_id not in EVENT_LOGS:
+            EVENT_LOGS[tab_id] = []
+        
+        logs = EVENT_LOGS[tab_id]
+        
+        if event_type:
+            logs = [log for log in logs if log.get("event_type") == event_type]
+        
+        logs = logs[-limit:] if limit > 0 else logs
+        
+        return create_success_response(json.dumps(logs, indent=2, default=str))
+    except Exception as e:
+        return create_error_response(f"Get event logs failed: {str(e)}")
+
+# === REQUEST INTERCEPTION IMPLEMENTATIONS ===
+
+async def continue_request(
+    tab_id: str,
+    request_id: str,
+    url: Optional[str] = None,
+    method: Optional[str] = None,
+    headers: Optional[List[Dict]] = None,
+    post_data: Optional[str] = None
+):
+    """Continue an intercepted request with modifications."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        kwargs = {"request_id": request_id}
+        if url:
+            kwargs["url"] = url
+        if method:
+            kwargs["method"] = method
+        if headers:
+            header_entries = [HeaderEntry(name=h["name"], value=h["value"]) for h in headers]
+            kwargs["headers"] = header_entries
+        if post_data:
+            kwargs["post_data"] = post_data
+        
+        await tab.continue_request(**kwargs)
+        
+        return create_success_response(f"Request '{request_id}' continued successfully")
+    except Exception as e:
+        return create_error_response(f"Continue request failed: {str(e)}")
+
+async def fail_request(tab_id: str, request_id: str, error_reason: str = "Failed"):
+    """Fail an intercepted request."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        error_enum = getattr(ErrorReason, error_reason.upper())
+        
+        await tab.fail_request(request_id, error_enum)
+        
+        return create_success_response(f"Request '{request_id}' failed with reason '{error_reason}'")
+    except Exception as e:
+        return create_error_response(f"Fail request failed: {str(e)}")
+
+async def fulfill_request(
+    tab_id: str,
+    request_id: str,
+    response_code: int = 200,
+    response_headers: Optional[List[Dict]] = None,
+    body: Optional[str] = None,
+    binary_body: Optional[str] = None
+):
+    """Fulfill an intercepted request with custom response."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        kwargs = {
+            "request_id": request_id,
+            "response_code": response_code
+        }
+        
+        if response_headers:
+            header_entries = [HeaderEntry(name=h["name"], value=h["value"]) for h in response_headers]
+            kwargs["response_headers"] = header_entries
+        
+        if binary_body:
+            kwargs["body"] = base64.b64decode(binary_body)
+        elif body:
+            kwargs["body"] = body.encode('utf-8')
+        
+        await tab.fulfill_request(**kwargs)
+        
+        return create_success_response(f"Request '{request_id}' fulfilled with status {response_code}")
+    except Exception as e:
+        return create_error_response(f"Fulfill request failed: {str(e)}")
+
+async def get_network_response_body(tab_id: str, request_id: str):
+    """Get the response body for a specific network request."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        response_body = await tab.get_network_response_body(request_id)
+        
+        try:
+            if isinstance(response_body, bytes):
+                text_body = response_body.decode('utf-8')
+            else:
+                text_body = str(response_body)
+            
+            return create_success_response(text_body)
+        except UnicodeDecodeError:
+            b64_body = base64.b64encode(response_body).decode('utf-8')
+            return create_success_response(f"Binary response (base64): {b64_body}")
+    except Exception as e:
+        return create_error_response(f"Get network response body failed: {str(e)}")
+
+async def get_network_logs(tab_id: str, filter_pattern: Optional[str] = None, limit: int = 100):
+    """Get network request logs with optional filtering."""
+    try:
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        logs = await tab.get_network_logs(filter=filter_pattern)
+        
+        if limit > 0:
+            logs = logs[-limit:]
+        
+        log_data = []
+        for log_entry in logs:
+            log_data.append({
+                "url": getattr(log_entry, 'url', None),
+                "method": getattr(log_entry, 'method', None),
+                "status": getattr(log_entry, 'status', None),
+                "timestamp": getattr(log_entry, 'timestamp', None),
+                "request_id": getattr(log_entry, 'requestId', None)
+            })
+        
+        return create_success_response(json.dumps(log_data, indent=2, default=str))
+    except Exception as e:
+        return create_error_response(f"Get network logs failed: {str(e)}")
+
+# === IFRAME SUPPORT ===
+
+async def get_frame(element_id: str, frame_tab_id: str):
+    """Get frame context from an iframe element."""
+    try:
+        element = get_element(element_id)
+        if not element:
+            raise ValueError(f"Element '{element_id}' not found")
+        
+        # Get the tab this element belongs to
+        tab = None
+        for tab_id, cached_element in ELEMENT_CACHE.items():
+            if cached_element == element:
+                tab = get_tab_session(tab_id.split('_')[0])
+                break
+        
+        if not tab:
+            raise ValueError("Cannot find tab for element")
+        
+        frame_tab = await tab.get_frame(element)
+        
+        TAB_SESSIONS[frame_tab_id] = frame_tab
+        
+        return create_success_response(f"Frame context created as tab '{frame_tab_id}'")
+    except Exception as e:
+        return create_error_response(f"Get frame failed: {str(e)}")
+
+# === BROWSER PREFERENCES ===
+
+async def set_browser_preferences(
+    session_id: str,
+    preferences: Optional[Dict] = None,
+    download_directory: Optional[str] = None,
+    accept_languages: Optional[str] = None,
+    prompt_for_download: Optional[bool] = None
+):
+    """Set advanced Chrome browser preferences."""
+    try:
+        browser = get_browser_session(session_id)
+        if not browser:
+            raise ValueError(f"Browser session '{session_id}' not found")
+        
+        options = browser._options_manager._options if hasattr(browser, '_options_manager') else None
+        if not options:
+            raise ValueError("Cannot access browser options")
+        
+        if preferences:
+            options.browser_preferences = {**options.browser_preferences, **preferences}
+        
+        if download_directory:
+            options.set_default_download_directory(download_directory)
+        
+        if accept_languages:
+            options.set_accept_languages(accept_languages)
+        
+        if prompt_for_download is not None:
+            options.prompt_for_download = prompt_for_download
+        
+        changes = []
+        if preferences:
+            changes.append(f"preferences: {len(preferences)} items")
+        if download_directory:
+            changes.append(f"download_directory: {download_directory}")
+        if accept_languages:
+            changes.append(f"accept_languages: {accept_languages}")
+        if prompt_for_download is not None:
+            changes.append(f"prompt_for_download: {prompt_for_download}")
+        
+        return create_success_response(f"Browser preferences updated: {', '.join(changes)}")
+    except Exception as e:
+        return create_error_response(f"Set browser preferences failed: {str(e)}")
+
+# === SESSION MANAGEMENT ===
+
+async def list_sessions():
+    """List all active browser and tab sessions."""
+    try:
+        session_info = {
+            "browser_sessions": list(BROWSER_SESSIONS.keys()),
+            "tab_sessions": list(TAB_SESSIONS.keys()),
+            "cached_elements": len(ELEMENT_CACHE),
+            "event_callbacks": {tab_id: len(callbacks) for tab_id, callbacks in EVENT_CALLBACKS.items()},
+            "event_logs": {tab_id: len(logs) for tab_id, logs in EVENT_LOGS.items()},
+            "network_logs": {tab_id: len(logs) for tab_id, logs in NETWORK_LOGS.items()}
+        }
+        
+        return create_success_response(json.dumps(session_info, indent=2))
+    except Exception as e:
+        return create_error_response(f"List sessions failed: {str(e)}")
+
+async def get_session_info(session_id: str):
+    """Get detailed information about a specific session."""
+    try:
+        info = {}
+        
+        if session_id in BROWSER_SESSIONS:
+            browser = BROWSER_SESSIONS[session_id]
+            info["type"] = "browser"
+            info["session_id"] = session_id
+            info["status"] = "active"
+        elif session_id in TAB_SESSIONS:
+            tab = TAB_SESSIONS[session_id]
+            info["type"] = "tab"
+            info["session_id"] = session_id
+            info["status"] = "active"
+            try:
+                info["url"] = await tab.current_url
+                info["title"] = await tab.title
+            except:
+                pass
+        else:
+            raise ValueError(f"Session '{session_id}' not found")
+        
+        return create_success_response(json.dumps(info, indent=2))
+    except Exception as e:
+        return create_error_response(f"Get session info failed: {str(e)}")
+
+async def cleanup_elements(tab_id: Optional[str] = None):
+    """Clean up cached element references."""
+    try:
+        if tab_id:
+            elements_to_remove = [elem_id for elem_id in ELEMENT_CACHE.keys() if elem_id.startswith(f"{tab_id}_")]
+            for elem_id in elements_to_remove:
+                del ELEMENT_CACHE[elem_id]
+            
+            return create_success_response(f"Cleaned up {len(elements_to_remove)} elements for tab '{tab_id}'")
+        else:
+            count = len(ELEMENT_CACHE)
+            ELEMENT_CACHE.clear()
+            
+            return create_success_response(f"Cleaned up {count} cached elements")
+    except Exception as e:
+        return create_error_response(f"Cleanup elements failed: {str(e)}")
+
+async def main():
+    """Run the unified PyDoll MCP Server with complete 1:1 feature parity."""
+    logger.info("Starting PyDoll MCP Server - UNIFIED with COMPLETE 1:1 PyDoll parity")
+    logger.info("This server provides access to ALL PyDoll browser automation capabilities")
+    
+    async with stdio_server() as (read_stream, write_stream):
+        await server.run(
+            read_stream,
+            write_stream,
+            InitializationOptions(
+                server_name="pydoll-automation-unified",
+                server_version="1.0.0",
+                capabilities=server.get_capabilities(
+                    notification_options=NotificationOptions(),
+                    experimental_capabilities={}
+                )
+            )
+        )
+
+
+async def async_main():
+    """Async main JSON-RPC server loop"""
+    global SERVER_LOOP
+    SERVER_LOOP = asyncio.get_running_loop()
+    
+    print(f"PyDoll MCP Server v{__version__} - Complete JSON-RPC Implementation", file=sys.stderr, flush=True)
+    print(f"Using Chrome at: {DEFAULT_CHROME_PATH}", file=sys.stderr, flush=True)
+    print("Server ready for JSON-RPC requests...", file=sys.stderr, flush=True)
+    
+    try:
+        # Read from stdin in async way
+        loop = asyncio.get_running_loop()
+        reader = asyncio.StreamReader()
+        protocol = asyncio.StreamReaderProtocol(reader)
+        await loop.connect_read_pipe(lambda: protocol, sys.stdin)
+        
+        while True:
+            line = await reader.readline()
+            if not line:
+                break
+                
+            line = line.decode().strip()
+            if not line:
+                continue
+                
+            try:
+                request = json.loads(line)
+                method = request.get("method")
+                request_id = request.get("id")
+                params = request.get("params", {})
+                
+                if method == "initialize":
+                    response = handle_initialize(request_id)
+                elif method == "tools/list":
+                    response = handle_tools_list(request_id)
+                elif method == "tools/call":
+                    tool_name = params.get("name")
+                    arguments = params.get("arguments", {})
+                    response = await handle_tool_call_async(request_id, tool_name, arguments)
+                else:
+                    response = {
+                        "jsonrpc": "2.0",
+                        "id": request_id,
+                        "error": {
+                            "code": -32601,
+                            "message": f"Method not found: {method}"
+                        }
+                    }
+                
+                send_response(response)
+                
+            except json.JSONDecodeError as e:
+                error_response = {
+                    "jsonrpc": "2.0",
+                    "id": None,
+                    "error": {
+                        "code": -32700,
+                        "message": f"Parse error: {str(e)}"
+                    }
+                }
+                send_response(error_response)
+                
+            except Exception as e:
+                error_response = {
+                    "jsonrpc": "2.0", 
+                    "id": request.get("id") if 'request' in locals() else None,
+                    "error": {
+                        "code": -32603,
+                        "message": f"Internal error: {str(e)}"
+                    }
+                }
+                send_response(error_response)
+    
+    except KeyboardInterrupt:
+        print("Server shutdown requested", file=sys.stderr, flush=True)
+    except Exception as e:
+        print(f"Server error: {e}", file=sys.stderr, flush=True)
+        sys.exit(1)
+    finally:
+        # Cleanup all sessions
+        for browser in BROWSER_SESSIONS.values():
+            try:
+                if hasattr(browser, 'quit'):
+                    browser.quit()
+                elif hasattr(browser, 'stop'):
+                    await browser.stop()
+                elif hasattr(browser, 'close'):
+                    await browser.close()
+            except:
+                pass
+        BROWSER_SESSIONS.clear()
+        TAB_SESSIONS.clear()
+        ELEMENT_CACHE.clear()
+
+def main():
+    """Main entry point"""
+    try:
+        asyncio.run(async_main())
+    except KeyboardInterrupt:
+        print("Server shutdown", file=sys.stderr, flush=True)
+
+if __name__ == "__main__":
+    main()
