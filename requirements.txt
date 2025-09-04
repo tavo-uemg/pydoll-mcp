@@ -1,0 +1,32 @@
+# PyDoll MCP Server Requirements
+# Core dependencies for PyDoll browser automation MCP server
+
+# PyDoll - Browser automation library using Chrome DevTools Protocol
+pydoll-python>=2.8.0
+
+# HTTP client library (required by PyDoll)
+aiohttp>=3.9.5
+
+# WebSocket client (required by PyDoll) 
+websockets>=14.0
+
+# Async file operations (required by PyDoll)
+aiofiles>=23.2.1
+
+# Type extensions for better typing support
+typing_extensions>=4.14.0
+
+# Standard library dependencies that should be available
+# asyncio - Built into Python 3.7+
+# json - Built into Python 3+
+# logging - Built into Python 3+
+# tempfile - Built into Python 3+
+# traceback - Built into Python 3+
+# sys - Built into Python 3+
+# os - Built into Python 3+
+# pathlib - Built into Python 3.4+
+# base64 - Built into Python 3+
+
+# Optional: For development and testing
+# pytest>=8.3.3
+# pytest-asyncio>=0.24.0
