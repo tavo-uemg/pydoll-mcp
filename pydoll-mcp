@@ -441,8 +441,14 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Find multiple elements using selector strategy",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "base_element_id": {"type": "string", "description": "Base element identifier for scoped search"},
+                            "selector_type": {"type": "string", "description": "Selector type (css, xpath, id, name, tag, class)"},
+                            "selector_value": {"type": "string", "description": "Selector value/expression"},
+                            "limit": {"type": "integer", "description": "Maximum number of elements to return"}
+                        },
+                        "required": ["tab_id", "base_element_id", "selector_type", "selector_value"]
                 }
         },
         {
@@ -729,8 +735,14 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Take screenshot of page or element",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "element_id": {"type": "string", "description": "Optional element identifier"},
+                            "full_page": {"type": "boolean", "description": "Capture full page beyond viewport", "default": False},
+                            "format": {"type": "string", "description": "Image format (png, jpeg)", "default": "png"},
+                            "quality": {"type": "integer", "description": "Image quality (1-100)", "default": 90}
+                        },
+                        "required": ["tab_id"]
                 }
         },
         {
@@ -846,8 +858,12 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Bypass Cloudflare protection automatically",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "url": {"type": "string", "description": "URL to navigate to and bypass Cloudflare"},
+                            "timeout": {"type": "integer", "description": "Timeout in seconds", "default": 30}
+                        },
+                        "required": ["tab_id", "url"]
                 }
         },
         {
@@ -1298,33 +1314,7 @@ async def navigate(tab_id: str, url: str, wait_until: str = "load") -> Dict[str,
     except Exception as e:
         return create_error_response(f"Failed to navigate: {str(e)}")
 
-async def go_back(tab_id: str) -> Dict[str, Any]:
-    """Navigate back in browser history"""
-    try:
-        tab = get_tab_session(tab_id)
-        if not tab:
-            return create_error_response(f"Tab '{tab_id}' not found")
-        
-        tab.back()
-        
-        return create_success_response("Navigated back successfully")
-        
-    except Exception as e:
-        return create_error_response(f"Failed to navigate back: {str(e)}")
 
-async def go_forward(tab_id: str) -> Dict[str, Any]:
-    """Navigate forward in browser history"""
-    try:
-        tab = get_tab_session(tab_id)
-        if not tab:
-            return create_error_response(f"Tab '{tab_id}' not found")
-        
-        tab.forward()
-        
-        return create_success_response("Navigated forward successfully")
-        
-    except Exception as e:
-        return create_error_response(f"Failed to navigate forward: {str(e)}")
 
 async def refresh_page(tab_id: str, ignore_cache: bool = False) -> Dict[str, Any]:
     """Refresh/reload the current page"""
@@ -1449,9 +1439,19 @@ async def go_back(tab_id: str):
         if not tab:
             raise ValueError(f"Tab '{tab_id}' not found")
         
-        await tab.go_back()
+        # Get navigation history first
+        from pydoll.commands import PageCommands
+        history_resp = await tab._execute_command(PageCommands.get_navigation_history())
+        history = history_resp['result']
         
-        return create_success_response("Successfully navigated back")
+        current_index = history['currentIndex']
+        if current_index > 0:
+            # Navigate to previous entry
+            prev_entry_id = history['entries'][current_index - 1]['id']
+            await tab._execute_command(PageCommands.navigate_to_history_entry(prev_entry_id))
+            return create_success_response("Successfully navigated back")
+        else:
+            return create_error_response("Cannot navigate back: already at the beginning of history")
     except Exception as e:
         return create_error_response(f"Go back failed: {str(e)}")
 
@@ -1462,9 +1462,20 @@ async def go_forward(tab_id: str):
         if not tab:
             raise ValueError(f"Tab '{tab_id}' not found")
         
-        await tab.go_forward()
+        # Get navigation history first
+        from pydoll.commands import PageCommands
+        history_resp = await tab._execute_command(PageCommands.get_navigation_history())
+        history = history_resp['result']
         
-        return create_success_response("Successfully navigated forward")
+        current_index = history['currentIndex']
+        entries = history['entries']
+        if current_index < len(entries) - 1:
+            # Navigate to next entry
+            next_entry_id = entries[current_index + 1]['id']
+            await tab._execute_command(PageCommands.navigate_to_history_entry(next_entry_id))
+            return create_success_response("Successfully navigated forward")
+        else:
+            return create_error_response("Cannot navigate forward: already at the end of history")
     except Exception as e:
         return create_error_response(f"Go forward failed: {str(e)}")
 
@@ -2269,7 +2280,19 @@ async def delete_cookies(
         if path:
             kwargs["path"] = path
         
-        await tab.delete_cookies(**kwargs)
+        # Use NetworkCommands for cookie deletion
+        from pydoll.commands import NetworkCommands
+        if name:
+            # Delete specific cookie by name
+            await tab._execute_command(NetworkCommands.delete_cookies(
+                name=name,
+                url=url,
+                domain=domain, 
+                path=path
+            ))
+        else:
+            # Clear all cookies if no name specified
+            await tab._execute_command(NetworkCommands.clear_browser_cookies())
         
         return create_success_response("Cookies deleted successfully")
     except Exception as e:
@@ -2411,7 +2434,11 @@ async def bypass_cloudflare(tab_id: str, url: str, timeout: int = 30):
         if not tab:
             raise ValueError(f"Tab '{tab_id}' not found")
         
-        await tab.bypass_cloudflare(url, timeout=timeout)
+        # Navigate to the URL first, then use the context manager to bypass cloudflare
+        await tab.go_to(url)
+        async with tab.expect_and_bypass_cloudflare_captcha():
+            # The context manager will automatically handle cloudflare bypass
+            await asyncio.sleep(timeout)  # Wait for the bypass to complete
         
         return create_success_response(f"Cloudflare bypass completed for {url}")
     except Exception as e:
