@@ -90,12 +90,26 @@ except ImportError as e:
     print(f"ERROR: Failed to import PyDoll: {e}", file=sys.stderr, flush=True)
     sys.exit(1)
 
+# Import MCP server components
+try:
+    from mcp.server import Server
+    from mcp.server.stdio import stdio_server
+    from mcp.types import ServerCapabilities, Implementation, Tool, CallToolResult, ImageContent, TextContent
+    from mcp.server import InitializationOptions
+except ImportError as e:
+    print(f"ERROR: Failed to import MCP: {e}", file=sys.stderr, flush=True)
+    print("Please install mcp package: pip install mcp", file=sys.stderr, flush=True)
+    sys.exit(1)
+
 # Server version
 __version__ = "3.0.0"
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+
+# Create MCP server instance
+server = Server("pydoll-mcp")
 
 # Global session management
 BROWSER_SESSIONS: Dict[str, Chrome] = {}
@@ -1084,92 +1098,7 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
 # Global event loop for the server
 SERVER_LOOP = None
 
-# Create a tool dispatcher mapping for easier maintenance
-TOOL_HANDLERS = {
-    "create_browser_session": create_browser_session,
-    "start_browser_session": start_browser_session,
-    "close_browser_session": close_browser_session,
-    "create_tab": create_tab,
-    "close_tab": close_tab,
-    "bring_tab_to_front": bring_tab_to_front,
-    "navigate": navigate,
-    "go_back": go_back,
-    "go_forward": go_forward,
-    "refresh_page": refresh_page,
-    "find_element": find_element,
-    "find_elements": find_elements,
-    "click_element": click_element,
-    "click_element_js": click_element_js,
-    "type_text": type_text,
-    "clear_text": clear_text,
-    "press_key": press_key,
-    "key_down": key_down,
-    "key_up": key_up,
-    "hover_element": hover_element,
-    "scroll_element": scroll_element,
-    "drag_and_drop": drag_and_drop,
-    "get_element_text": get_element_text,
-    "get_element_attribute": get_element_attribute,
-    "get_element_property": get_element_property,
-    "get_element_html": get_element_html,
-    "get_element_bounds": get_element_bounds,
-    "get_element_bounds_js": get_element_bounds_js,
-    "is_element_visible": is_element_visible,
-    "is_element_enabled": is_element_enabled,
-    "is_element_selected": is_element_selected,
-    "is_element_on_top": is_element_on_top,
-    "is_element_interactable": is_element_interactable,
-    "get_parent_element": get_parent_element,
-    "get_child_elements": get_child_elements,
-    "get_sibling_elements": get_sibling_elements,
-    "element_wait_until": element_wait_until,
-    "wait_for_element": wait_for_element,
-    "execute_script": execute_script,
-    "execute_script_on_element": execute_script_on_element,
-    "get_page_title": get_page_title,
-    "get_page_url": get_page_url,
-    "get_page_source": get_page_source,
-    "take_screenshot": take_screenshot,
-    "save_pdf": save_pdf,
-    "make_request": make_request,
-    "set_cookies": set_cookies,
-    "get_cookies": get_cookies,
-    "delete_cookies": delete_cookies,
-    "upload_file": upload_file,
-    "download_file": download_file,
-    "expect_file_chooser": expect_file_chooser,
-    "enable_file_chooser_intercept": enable_file_chooser_intercept,
-    "disable_file_chooser_intercept": disable_file_chooser_intercept,
-    "wait_for_page_load": wait_for_page_load,
-    "wait_for_function": wait_for_function,
-    "bypass_cloudflare": bypass_cloudflare,
-    "enable_auto_solve_cloudflare": enable_auto_solve_cloudflare,
-    "disable_auto_solve_cloudflare": disable_auto_solve_cloudflare,
-    "expect_and_bypass_cloudflare": expect_and_bypass_cloudflare,
-    "handle_alert": handle_alert,
-    "has_dialog": has_dialog,
-    "get_dialog_message": get_dialog_message,
-    "enable_page_events": enable_page_events,
-    "enable_network_events": enable_network_events,
-    "enable_fetch_events": enable_fetch_events,
-    "enable_dom_events": enable_dom_events,
-    "enable_runtime_events": enable_runtime_events,
-    "disable_all_events": disable_all_events,
-    "register_event_callback": register_event_callback,
-    "remove_event_callback": remove_event_callback,
-    "clear_event_callbacks": clear_event_callbacks,
-    "get_event_logs": get_event_logs,
-    "continue_request": continue_request,
-    "fail_request": fail_request,
-    "fulfill_request": fulfill_request,
-    "get_network_response_body": get_network_response_body,
-    "get_network_logs": get_network_logs,
-    "get_frame": get_frame,
-    "set_browser_preferences": set_browser_preferences,
-    "list_sessions": list_sessions,
-    "get_session_info": get_session_info,
-    "cleanup_elements": cleanup_elements,
-}
+# TOOL_HANDLERS will be defined after function definitions
 
 async def handle_tool_call_async(request_id: Any, tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
     """Handle tool calls asynchronously with proper timeout handling"""
@@ -1235,19 +1164,20 @@ async def create_browser_session(
     additional_args: Optional[List[str]] = None,
     chrome_path: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Create a new Chrome browser instance"""
+    """Create a new Chrome browser instance using PyDoll async context manager"""
     try:
         if session_id in BROWSER_SESSIONS:
             return create_error_response(f"Browser session '{session_id}' already exists")
         
-        # Create Chrome browser instance with minimal options (PyDoll handles the rest)
+        # Create Chrome browser instance with options
         options = ChromiumOptions()
         
-        # Only set essential options, let PyDoll handle the rest
-        if chrome_path:
-            options.binary_location = chrome_path
-        elif DEFAULT_CHROME_PATH:
-            options.binary_location = DEFAULT_CHROME_PATH
+        # Add essential Chrome arguments for container environment
+        options.add_argument("--no-sandbox")
+        options.add_argument("--disable-dev-shm-usage")
+        options.add_argument("--disable-gpu")
+        options.add_argument("--disable-web-security")
+        options.add_argument("--disable-extensions")
         
         if headless:
             options.add_argument("--headless")
@@ -1265,41 +1195,43 @@ async def create_browser_session(
             for arg in additional_args:
                 options.add_argument(arg)
         
+        logger.info(f"Creating Chrome browser for session {session_id} with options: {[arg for arg in options.arguments]}")
+        
+        # Create the browser instance (without context manager for persistent sessions)
         browser = Chrome(options=options)
         
-        # Start the browser immediately and get the initial tab
-        logger.info(f"Starting browser for session {session_id}")
-        initial_tab = await browser.start()
-        logger.info(f"Browser started successfully for session {session_id}")
-        
+        # Store browser instance
         BROWSER_SESSIONS[session_id] = browser
         
-        # Store the initial tab
-        initial_tab_id = f"{session_id}_initial"
-        TAB_SESSIONS[initial_tab_id] = initial_tab
-        logger.info(f"Initial tab stored with ID {initial_tab_id}")
+        logger.info(f"Browser session '{session_id}' created successfully (not started yet)")
         
-        return create_success_response(f"Browser session '{session_id}' created with initial tab '{initial_tab_id}'")
+        return create_success_response(f"Browser session '{session_id}' created. Use start_browser_session to initialize.")
         
     except Exception as e:
+        logger.error(f"Failed to create browser session {session_id}: {e}")
+        import traceback
+        traceback.print_exc()
         return create_error_response(f"Failed to create browser session: {str(e)}")
 
 async def start_browser_session(session_id: str) -> Dict[str, Any]:
-    """Start an existing browser session"""
+    """Start an existing browser session and create initial tab"""
     try:
         if session_id not in BROWSER_SESSIONS:
             return create_error_response(f"Browser session '{session_id}' not found")
         
         browser = BROWSER_SESSIONS[session_id]
         
-        # Start the browser and get initial tab
+        # Check if already started
+        initial_tab_id = f"{session_id}_initial"
+        if initial_tab_id in TAB_SESSIONS:
+            return create_success_response(f"Browser session '{session_id}' already started with tab '{initial_tab_id}'")
+        
         try:
             logger.info(f"Starting browser for session {session_id}")
             initial_tab = await asyncio.wait_for(browser.start(), timeout=60)
-            logger.info(f"Browser started successfully for session {session_id}")
+            logger.info(f"Browser started successfully for session {session_id}, tab type: {type(initial_tab)}")
             
             # Store the initial tab
-            initial_tab_id = f"{session_id}_initial"
             TAB_SESSIONS[initial_tab_id] = initial_tab
             logger.info(f"Initial tab stored with ID {initial_tab_id}")
             
@@ -1310,9 +1242,12 @@ async def start_browser_session(session_id: str) -> Dict[str, Any]:
             return create_error_response("Browser start timed out after 60 seconds")
         except Exception as e:
             logger.error(f"Browser start failed for session {session_id}: {e}")
+            import traceback
+            traceback.print_exc()
             return create_error_response(f"Browser start failed: {str(e)}")
             
     except Exception as e:
+        logger.error(f"Failed to start browser session: {e}")
         return create_error_response(f"Failed to start browser session: {str(e)}")
 
 async def close_browser_session(session_id: str) -> Dict[str, Any]:
@@ -1501,7 +1436,7 @@ async def navigate(tab_id: str, url: str, wait_until: str = "load"):
         if not tab:
             raise ValueError(f"Tab '{tab_id}' not found")
         
-        await tab.go_to(url, wait_until=wait_until)
+        await tab.go_to(url)
         
         return create_success_response(f"Successfully navigated to {url}")
     except Exception as e:
@@ -2121,7 +2056,8 @@ async def get_page_title(tab_id: str):
         if not tab:
             raise ValueError(f"Tab '{tab_id}' not found")
         
-        title = await tab.title
+        result = await tab.execute_script("document.title")
+        title = result.result.value if hasattr(result, 'result') and hasattr(result.result, 'value') else ""
         
         return create_success_response(title or "")
     except Exception as e:
@@ -2170,15 +2106,18 @@ async def take_screenshot(
             element = get_element(element_id)
             if not element:
                 raise ValueError(f"Element '{element_id}' not found")
-            screenshot_data = await element.screenshot()
+            import tempfile
+            import os
+            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                await element.take_screenshot(tmp.name)
+                with open(tmp.name, 'rb') as f:
+                    screenshot_data = base64.b64encode(f.read()).decode('utf-8')
+                os.unlink(tmp.name)
         else:
-            if full_page:
-                screenshot_data = await tab.screenshot_full_page()
-            else:
-                screenshot_data = await tab.screenshot()
+            screenshot_data = await tab.take_screenshot(as_base64=True, beyond_viewport=full_page)
         
-        # Convert to base64 for transmission
-        screenshot_b64 = base64.b64encode(screenshot_data).decode('utf-8')
+        # screenshot_data is already base64 when as_base64=True
+        screenshot_b64 = screenshot_data
         
         return CallToolResult(
             content=[
@@ -3016,8 +2955,9 @@ async def get_session_info(session_id: str):
             info["session_id"] = session_id
             info["status"] = "active"
             try:
-                info["url"] = await tab.current_url
-                info["title"] = await tab.title
+                info["url"] = await tab.current_url()
+                result = await tab.execute_script("document.title")
+                info["title"] = result.result.value if hasattr(result, 'result') and hasattr(result.result, 'value') else ""
             except:
                 pass
         else:
@@ -3044,6 +2984,126 @@ async def cleanup_elements(tab_id: Optional[str] = None):
     except Exception as e:
         return create_error_response(f"Cleanup elements failed: {str(e)}")
 
+# Create a tool dispatcher mapping for easier maintenance
+TOOL_HANDLERS = {
+    "create_browser_session": create_browser_session,
+    "start_browser_session": start_browser_session,
+    "close_browser_session": close_browser_session,
+    "create_tab": create_tab,
+    "close_tab": close_tab,
+    "bring_tab_to_front": bring_tab_to_front,
+    "navigate": navigate,
+    "go_back": go_back,
+    "go_forward": go_forward,
+    "refresh_page": refresh_page,
+    "find_element": find_element,
+    "find_elements": find_elements,
+    "click_element": click_element,
+    "click_element_js": click_element_js,
+    "type_text": type_text,
+    "clear_text": clear_text,
+    "press_key": press_key,
+    "key_down": key_down,
+    "key_up": key_up,
+    "hover_element": hover_element,
+    "scroll_element": scroll_element,
+    "drag_and_drop": drag_and_drop,
+    "get_element_text": get_element_text,
+    "get_element_attribute": get_element_attribute,
+    "get_element_property": get_element_property,
+    "get_element_html": get_element_html,
+    "get_element_bounds": get_element_bounds,
+    "get_element_bounds_js": get_element_bounds_js,
+    "is_element_visible": is_element_visible,
+    "is_element_enabled": is_element_enabled,
+    "is_element_selected": is_element_selected,
+    "is_element_on_top": is_element_on_top,
+    "is_element_interactable": is_element_interactable,
+    "get_parent_element": get_parent_element,
+    "get_child_elements": get_child_elements,
+    "get_sibling_elements": get_sibling_elements,
+    "element_wait_until": element_wait_until,
+    "wait_for_element": wait_for_element,
+    "execute_script": execute_script,
+    "execute_script_on_element": execute_script_on_element,
+    "get_page_title": get_page_title,
+    "get_page_url": get_page_url,
+    "get_page_source": get_page_source,
+    "take_screenshot": take_screenshot,
+    "save_pdf": save_pdf,
+    "make_request": make_request,
+    "set_cookies": set_cookies,
+    "get_cookies": get_cookies,
+    "delete_cookies": delete_cookies,
+    "upload_file": upload_file,
+    "download_file": download_file,
+    "expect_file_chooser": expect_file_chooser,
+    "enable_file_chooser_intercept": enable_file_chooser_intercept,
+    "disable_file_chooser_intercept": disable_file_chooser_intercept,
+    "wait_for_page_load": wait_for_page_load,
+    "wait_for_function": wait_for_function,
+    "bypass_cloudflare": bypass_cloudflare,
+    "enable_auto_solve_cloudflare": enable_auto_solve_cloudflare,
+    "disable_auto_solve_cloudflare": disable_auto_solve_cloudflare,
+    "expect_and_bypass_cloudflare": expect_and_bypass_cloudflare,
+    "handle_alert": handle_alert,
+    "has_dialog": has_dialog,
+    "get_dialog_message": get_dialog_message,
+    "enable_page_events": enable_page_events,
+    "enable_network_events": enable_network_events,
+    "enable_fetch_events": enable_fetch_events,
+    "enable_dom_events": enable_dom_events,
+    "enable_runtime_events": enable_runtime_events,
+    "disable_all_events": disable_all_events,
+    "register_event_callback": register_event_callback,
+    "remove_event_callback": remove_event_callback,
+    "clear_event_callbacks": clear_event_callbacks,
+    "get_event_logs": get_event_logs,
+    "continue_request": continue_request,
+    "fail_request": fail_request,
+    "fulfill_request": fulfill_request,
+    "get_network_response_body": get_network_response_body,
+    "get_network_logs": get_network_logs,
+    "get_frame": get_frame,
+    "set_browser_preferences": set_browser_preferences,
+    "list_sessions": list_sessions,
+    "get_session_info": get_session_info,
+    "cleanup_elements": cleanup_elements,
+}
+
+# Register all tools with the MCP server
+@server.call_tool()
+async def call_tool(name: str, arguments: dict) -> str:
+    """Handle tool calls from MCP client."""
+    try:
+        if name not in TOOL_HANDLERS:
+            return create_error_response(f"Unknown tool: {name}")
+        
+        handler = TOOL_HANDLERS[name]
+        result = await handler(**arguments)
+        return result
+    except Exception as e:
+        logger.error(f"Tool call error for {name}: {e}")
+        return create_error_response(f"Tool execution failed: {str(e)}")
+
+@server.list_tools()
+async def list_tools() -> list[Tool]:
+    """List all available PyDoll browser automation tools."""
+    # Convert the existing handle_tools_list format to MCP format
+    tools_response = handle_tools_list(None)
+    tools_data = tools_response.get("result", {}).get("tools", [])
+    
+    # Convert dict format to MCP Tool objects
+    mcp_tools = []
+    for tool_data in tools_data:
+        mcp_tools.append(Tool(
+            name=tool_data["name"],
+            description=tool_data["description"],
+            inputSchema=tool_data["inputSchema"]
+        ))
+    
+    return mcp_tools
+
 async def main():
     """Run the unified PyDoll MCP Server with complete 1:1 feature parity."""
     logger.info("Starting PyDoll MCP Server - UNIFIED with COMPLETE 1:1 PyDoll parity")
@@ -3056,9 +3116,8 @@ async def main():
             InitializationOptions(
                 server_name="pydoll-automation-unified",
                 server_version="1.0.0",
-                capabilities=server.get_capabilities(
-                    notification_options=NotificationOptions(),
-                    experimental_capabilities={}
+                capabilities=ServerCapabilities(
+                    tools={}
                 )
             )
         )
@@ -3158,12 +3217,12 @@ async def async_main():
         TAB_SESSIONS.clear()
         ELEMENT_CACHE.clear()
 
-def main():
+def run_server():
     """Main entry point"""
     try:
-        asyncio.run(async_main())
+        asyncio.run(main())
     except KeyboardInterrupt:
         print("Server shutdown", file=sys.stderr, flush=True)
 
 if __name__ == "__main__":
-    main()
+    run_server()
