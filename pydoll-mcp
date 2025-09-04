@@ -177,6 +177,18 @@ def create_error_response(text: str) -> Dict[str, Any]:
         "content": [{"type": "text", "text": f"Error: {str(text)}"}]
     }
 
+def create_success_response_with_image(base64_data: str, mime_type: str) -> Dict[str, Any]:
+    """Create a success response with image data"""
+    return {
+        "content": [
+            {
+                "type": "image",
+                "data": base64_data,
+                "mimeType": mime_type
+            }
+        ]
+    }
+
 def create_json_response(data: Dict[str, Any]) -> Dict[str, Any]:
     """Create a JSON data response"""
     return {
@@ -871,8 +883,12 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Enable automatic Cloudflare captcha solving in background",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "custom_selector": {"type": "string", "description": "Custom selector for Cloudflare element"},
+                            "time_before_click": {"type": "number", "description": "Time to wait before clicking (seconds)", "default": 5}
+                        },
+                        "required": ["tab_id"]
                 }
         },
         {
@@ -880,8 +896,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Disable automatic Cloudflare captcha solving",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"}
+                        },
+                        "required": ["tab_id"]
                 }
         },
         {
@@ -1386,7 +1404,7 @@ async def close_tab(tab_id: str):
             raise ValueError(f"Tab '{tab_id}' not found")
         
         tab = TAB_SESSIONS[tab_id]
-        await tab.close()
+        await asyncio.wait_for(tab.close(), timeout=10.0)
         
         # Clean up related elements and events
         elements_to_remove = [elem_id for elem_id in ELEMENT_CACHE.keys() if elem_id.startswith(f"{tab_id}_")]
@@ -1516,15 +1534,29 @@ async def find_element(
             "name": By.NAME,
             "tag": By.TAG_NAME,
             "class": By.CLASS_NAME,
-            "link_text": By.LINK_TEXT,
-            "partial_link_text": By.PARTIAL_LINK_TEXT
         }
         
         if selector_type not in selector_map:
             raise ValueError(f"Invalid selector type: {selector_type}")
         
         by_type = selector_map[selector_type]
-        element = await tab.find_element(by_type, selector_value, timeout=timeout)
+        if selector_type == "css":
+            element = await tab.query(selector_value, timeout=timeout, raise_exc=False)
+        elif selector_type == "xpath":
+            element = await tab.query(selector_value, timeout=timeout, raise_exc=False)
+        elif selector_type == "id":
+            element = await tab.find(id=selector_value, timeout=timeout, raise_exc=False)
+        elif selector_type == "name":
+            element = await tab.find(name=selector_value, timeout=timeout, raise_exc=False)
+        elif selector_type == "tag":
+            element = await tab.find(tag_name=selector_value, timeout=timeout, raise_exc=False)
+        elif selector_type == "class":
+            element = await tab.find(class_name=selector_value, timeout=timeout, raise_exc=False)
+        else:
+            element = await tab._find_element(by_type, selector_value, raise_exc=False)
+        
+        if not element:
+            raise ValueError(f"Element not found with selector '{selector_type}': {selector_value}")
         
         ELEMENT_CACHE[element_id] = element
         
@@ -1553,15 +1585,26 @@ async def find_elements(
             "name": By.NAME,
             "tag": By.TAG_NAME,
             "class": By.CLASS_NAME,
-            "link_text": By.LINK_TEXT,
-            "partial_link_text": By.PARTIAL_LINK_TEXT
         }
         
         if selector_type not in selector_map:
             raise ValueError(f"Invalid selector type: {selector_type}")
         
         by_type = selector_map[selector_type]
-        elements = await tab.find_elements(by_type, selector_value)
+        if selector_type == "css":
+            elements = await tab.query(selector_value, find_all=True, raise_exc=False) or []
+        elif selector_type == "xpath":
+            elements = await tab.query(selector_value, find_all=True, raise_exc=False) or []
+        elif selector_type == "id":
+            elements = await tab.find(id=selector_value, find_all=True, raise_exc=False) or []
+        elif selector_type == "name":
+            elements = await tab.find(name=selector_value, find_all=True, raise_exc=False) or []
+        elif selector_type == "tag":
+            elements = await tab.find(tag_name=selector_value, find_all=True, raise_exc=False) or []
+        elif selector_type == "class":
+            elements = await tab.find(class_name=selector_value, find_all=True, raise_exc=False) or []
+        else:
+            elements = await tab._find_elements(by_type, selector_value, raise_exc=False)
         
         if limit:
             elements = elements[:limit]
@@ -2130,16 +2173,7 @@ async def take_screenshot(
         # screenshot_data is already base64 when as_base64=True
         screenshot_b64 = screenshot_data
         
-        return CallToolResult(
-            content=[
-                ImageContent(
-                    type="image",
-                    data=screenshot_b64,
-                    mimeType=f"image/{format}"
-                )
-            ],
-            isError=False
-        )
+        return create_success_response_with_image(screenshot_b64, f"image/{format}")
     except Exception as e:
         return create_error_response(f"Take screenshot failed: {str(e)}")
 
@@ -2402,7 +2436,7 @@ async def wait_for_page_load(tab_id: str, wait_until: str = "load", timeout: int
         if not tab:
             raise ValueError(f"Tab '{tab_id}' not found")
         
-        await tab.wait_for_load_state(wait_until, timeout=timeout)
+        await tab._wait_page_load(timeout=timeout)
         
         return create_success_response(f"Page load completed ({wait_until})")
     except Exception as e:
@@ -2740,7 +2774,7 @@ async def get_event_logs(tab_id: str, event_type: Optional[str] = None, limit: i
         if event_type:
             logs = [log for log in logs if log.get("event_type") == event_type]
         
-        logs = logs[-limit:] if limit > 0 else logs
+        logs = logs[-limit:] if limit and limit > 0 else logs
         
         return create_success_response(json.dumps(logs, indent=2, default=str))
     except Exception as e:
