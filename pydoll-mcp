@@ -386,15 +386,6 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 }
         },
         {
-                "name": "close_tab",
-                "description": "Close a browser tab",
-                "inputSchema": {
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                }
-        },
-        {
                 "name": "bring_tab_to_front",
                 "description": "Bring a tab to the front/focus",
                 "inputSchema": {
@@ -558,8 +549,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Get visible text content of an element",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"}
+                        },
+                        "required": ["element_id"]
                 }
         },
         {
@@ -752,7 +745,8 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                             "element_id": {"type": "string", "description": "Optional element identifier"},
                             "full_page": {"type": "boolean", "description": "Capture full page beyond viewport", "default": False},
                             "format": {"type": "string", "description": "Image format (png, jpeg)", "default": "png"},
-                            "quality": {"type": "integer", "description": "Image quality (1-100)", "default": 90}
+                            "quality": {"type": "integer", "description": "Image quality (1-100)", "default": 90},
+                            "save_path": {"type": "string", "description": "Optional file path to save screenshot instead of returning base64"}
                         },
                         "required": ["tab_id"]
                 }
@@ -1069,8 +1063,12 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Get network request logs with optional filtering",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "filter_pattern": {"type": "string", "description": "Optional filter pattern"},
+                            "limit": {"type": "integer", "description": "Maximum number of logs to return", "default": 100}
+                        },
+                        "required": ["tab_id"]
                 }
         },
         {
@@ -2148,7 +2146,8 @@ async def take_screenshot(
     element_id: Optional[str] = None,
     full_page: bool = False,
     format: str = "png",
-    quality: int = 90
+    quality: int = 90,
+    save_path: Optional[str] = None
 ):
     """Take screenshot of page or element."""
     try:
@@ -2156,24 +2155,37 @@ async def take_screenshot(
         if not tab:
             raise ValueError(f"Tab '{tab_id}' not found")
         
-        if element_id:
-            element = get_element(element_id)
-            if not element:
-                raise ValueError(f"Element '{element_id}' not found")
-            import tempfile
-            import os
-            with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
-                await element.take_screenshot(tmp.name)
-                with open(tmp.name, 'rb') as f:
-                    screenshot_data = base64.b64encode(f.read()).decode('utf-8')
-                os.unlink(tmp.name)
+        if save_path:
+            # Save directly to file
+            if element_id:
+                element = get_element(element_id)
+                if not element:
+                    raise ValueError(f"Element '{element_id}' not found")
+                await element.take_screenshot(save_path)
+            else:
+                await tab.take_screenshot(file_path=save_path, beyond_viewport=full_page)
+            
+            return create_success_response(f"Screenshot saved to: {save_path}")
         else:
-            screenshot_data = await tab.take_screenshot(as_base64=True, beyond_viewport=full_page)
-        
-        # screenshot_data is already base64 when as_base64=True
-        screenshot_b64 = screenshot_data
-        
-        return create_success_response_with_image(screenshot_b64, f"image/{format}")
+            # Return base64 data
+            if element_id:
+                element = get_element(element_id)
+                if not element:
+                    raise ValueError(f"Element '{element_id}' not found")
+                import tempfile
+                import os
+                with tempfile.NamedTemporaryFile(suffix='.png', delete=False) as tmp:
+                    await element.take_screenshot(tmp.name)
+                    with open(tmp.name, 'rb') as f:
+                        screenshot_data = base64.b64encode(f.read()).decode('utf-8')
+                    os.unlink(tmp.name)
+            else:
+                screenshot_data = await tab.take_screenshot(as_base64=True, beyond_viewport=full_page)
+            
+            # screenshot_data is already base64 when as_base64=True
+            screenshot_b64 = screenshot_data
+            
+            return create_success_response_with_image(screenshot_b64, f"image/{format}")
     except Exception as e:
         return create_error_response(f"Take screenshot failed: {str(e)}")
 
@@ -2893,6 +2905,8 @@ async def get_network_logs(tab_id: str, filter_pattern: Optional[str] = None, li
         
         logs = await tab.get_network_logs(filter=filter_pattern)
         
+        # Ensure limit is an integer
+        limit = int(limit) if limit is not None else 100
         if limit > 0:
             logs = logs[-limit:]
         
