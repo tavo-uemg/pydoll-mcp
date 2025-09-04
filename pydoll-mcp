@@ -182,59 +182,6 @@ def get_element(element_id: str):
     """Get element by ID"""
     return ELEMENT_CACHE.get(element_id)
 
-def create_chrome_options(
-    headless: bool = True,
-    window_size: Optional[str] = None,
-    user_agent: Optional[str] = None,
-    proxy: Optional[str] = None,
-    disable_images: bool = False,
-    disable_javascript: bool = False,
-    additional_args: Optional[List[str]] = None,
-    chrome_path: Optional[str] = None
-) -> ChromiumOptions:
-    """Create Chrome options with specified configuration"""
-    options = ChromiumOptions()
-    
-    if chrome_path:
-        options.binary_location = chrome_path
-    elif DEFAULT_CHROME_PATH:
-        options.binary_location = DEFAULT_CHROME_PATH
-    
-    # Core configuration
-    if headless:
-        options.add_argument("--headless")
-    
-    if window_size:
-        options.add_argument(f"--window-size={window_size}")
-    else:
-        options.add_argument("--window-size=1920,1080")
-    
-    # Network configuration
-    if user_agent:
-        options.add_argument(f"--user-agent={user_agent}")
-    
-    if proxy:
-        options.add_argument(f"--proxy-server={proxy}")
-    
-    # Performance optimization
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage") 
-    options.add_argument("--disable-gpu")
-    options.add_argument("--disable-web-security")
-    options.add_argument("--disable-features=VizDisplayCompositor")
-    
-    # Content control
-    if disable_images:
-        options.add_argument("--blink-settings=imagesEnabled=false")
-    
-    if disable_javascript:
-        options.add_argument("--disable-javascript")
-    
-    if additional_args:
-        for arg in additional_args:
-            options.add_argument(arg)
-    
-    return options
 
 def handle_initialize(request_id: Any) -> Dict[str, Any]:
     """Handle initialization"""
@@ -1293,18 +1240,31 @@ async def create_browser_session(
         if session_id in BROWSER_SESSIONS:
             return create_error_response(f"Browser session '{session_id}' already exists")
         
-        options = create_chrome_options(
-            headless=headless,
-            window_size=window_size,
-            user_agent=user_agent,
-            proxy=proxy,
-            disable_images=disable_images,
-            disable_javascript=disable_javascript,
-            additional_args=additional_args,
-            chrome_path=chrome_path
-        )
+        # Create Chrome browser instance with minimal options (PyDoll handles the rest)
+        options = ChromiumOptions()
         
-        # Create Chrome browser instance (but don't start yet)
+        # Only set essential options, let PyDoll handle the rest
+        if chrome_path:
+            options.binary_location = chrome_path
+        elif DEFAULT_CHROME_PATH:
+            options.binary_location = DEFAULT_CHROME_PATH
+        
+        if headless:
+            options.add_argument("--headless")
+        if window_size:
+            options.add_argument(f"--window-size={window_size}")
+        if user_agent:
+            options.add_argument(f"--user-agent={user_agent}")
+        if proxy:
+            options.add_argument(f"--proxy-server={proxy}")
+        if disable_images:
+            options.add_argument("--blink-settings=imagesEnabled=false")
+        if disable_javascript:
+            options.add_argument("--disable-javascript")
+        if additional_args:
+            for arg in additional_args:
+                options.add_argument(arg)
+        
         browser = Chrome(options=options)
         BROWSER_SESSIONS[session_id] = browser
         
@@ -1433,42 +1393,6 @@ async def refresh_page(tab_id: str, ignore_cache: bool = False) -> Dict[str, Any
         
     except Exception as e:
         return create_error_response(f"Failed to refresh page: {str(e)}")
-
-async def create_browser_session(
-    session_id: str,
-    headless: bool = True,
-    window_size: Optional[str] = None,
-    user_agent: Optional[str] = None,
-    proxy: Optional[str] = None,
-    disable_images: bool = False,
-    disable_javascript: bool = False,
-    additional_args: Optional[List[str]] = None,
-    chrome_path: Optional[str] = None
-):
-    """Create a new Chrome browser session."""
-    try:
-        if session_id in BROWSER_SESSIONS:
-            raise ValueError(f"Session '{session_id}' already exists")
-        
-        options = create_chrome_options(
-            headless=headless,
-            window_size=window_size,
-            user_agent=user_agent,
-            proxy=proxy,
-            disable_images=disable_images,
-            disable_javascript=disable_javascript,
-            additional_args=additional_args,
-            chrome_path=chrome_path
-        )
-        
-        browser = Chrome(options=options)
-        await browser.start()
-        
-        BROWSER_SESSIONS[session_id] = browser
-        
-        return create_success_response(f"Browser session '{session_id}' created successfully")
-    except Exception as e:
-        return create_error_response(f"Failed to create browser session: {str(e)}")
 
 async def close_browser_session(session_id: str):
     """Close a browser session and cleanup resources."""
