@@ -1,6 +1,9 @@
 # PyDoll MCP Server Requirements
 # Core dependencies for PyDoll browser automation MCP server
 
+# MCP (Model Context Protocol) Python SDK
+mcp>=1.0.0
+
 # PyDoll - Browser automation library using Chrome DevTools Protocol
 pydoll-python>=2.8.0
 
