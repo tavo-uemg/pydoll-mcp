@@ -435,14 +435,8 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Find a single element using various selector strategies",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {
-                            "tab_id": {"type": "string", "description": "Tab identifier"},
-                            "element_id": {"type": "string", "description": "Element identifier for scoped search"},
-                            "selector_type": {"type": "string", "description": "Selector type (css, xpath, id, name, tag, class)"},
-                            "selector_value": {"type": "string", "description": "Selector value/expression"},
-                            "timeout": {"type": "number", "description": "Timeout in seconds", "default": 10}
-                        },
-                        "required": ["tab_id", "element_id", "selector_type", "selector_value"]
+                        "properties": {},
+                        "required": []
                 }
         },
         {
@@ -465,12 +459,8 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Click an element using mouse simulation",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {
-                            "element_id": {"type": "string", "description": "Element identifier"},
-                            "button": {"type": "string", "description": "Mouse button (left, right, middle)", "default": "left"},
-                            "click_count": {"type": "integer", "description": "Number of clicks", "default": 1}
-                        },
-                        "required": ["element_id"]
+                        "properties": {},
+                        "required": []
                 }
         },
         {
@@ -478,10 +468,8 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Click element using JavaScript instead of mouse simulation",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {
-                            "element_id": {"type": "string", "description": "Element identifier"}
-                        },
-                        "required": ["element_id"]
+                        "properties": {},
+                        "required": []
                 }
         },
         {
@@ -489,13 +477,8 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Type text into an element",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {
-                            "element_id": {"type": "string", "description": "Element identifier"},
-                            "text": {"type": "string", "description": "Text to type"},
-                            "clear_first": {"type": "boolean", "description": "Clear existing text first", "default": false},
-                            "delay": {"type": "integer", "description": "Delay between keystrokes in milliseconds", "default": 0}
-                        },
-                        "required": ["element_id", "text"]
+                        "properties": {},
+                        "required": []
                 }
         },
         {
@@ -503,10 +486,8 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Clear text from an input element",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {
-                            "element_id": {"type": "string", "description": "Element identifier"}
-                        },
-                        "required": ["element_id"]
+                        "properties": {},
+                        "required": []
                 }
         },
         {
@@ -514,12 +495,8 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Press a specific key or key combination",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {
-                            "key": {"type": "string", "description": "Key to press (e.g., 'enter', 'escape', 'tab')"},
-                            "element_id": {"type": "string", "description": "Optional element identifier to focus first"},
-                            "modifiers": {"type": "array", "items": {"type": "string"}, "description": "Modifier keys (ctrl, shift, alt, meta)"}
-                        },
-                        "required": ["key"]
+                        "properties": {},
+                        "required": []
                 }
         },
         {
@@ -527,12 +504,8 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Press and hold a key (without releasing)",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {
-                            "element_id": {"type": "string", "description": "Element identifier"},
-                            "key": {"type": "string", "description": "Key to press down"},
-                            "modifiers": {"type": "array", "items": {"type": "string"}, "description": "Modifier keys (ctrl, shift, alt, meta)"}
-                        },
-                        "required": ["element_id", "key"]
+                        "properties": {},
+                        "required": []
                 }
         },
         {
@@ -540,11 +513,8 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Release a previously pressed key",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {
-                            "element_id": {"type": "string", "description": "Element identifier"},
-                            "key": {"type": "string", "description": "Key to release"}
-                        },
-                        "required": ["element_id", "key"]
+                        "properties": {},
+                        "required": []
                 }
         },
         {
@@ -552,10 +522,8 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Hover mouse over an element",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {
-                            "element_id": {"type": "string", "description": "Element identifier"}
-                        },
-                        "required": ["element_id"]
+                        "properties": {},
+                        "required": []
                 }
         },
         {
@@ -563,13 +531,8 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Scroll element into view or by specific amount",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {
-                            "element_id": {"type": "string", "description": "Element identifier"},
-                            "x": {"type": "integer", "description": "Horizontal scroll offset"},
-                            "y": {"type": "integer", "description": "Vertical scroll offset"},
-                            "behavior": {"type": "string", "description": "Scroll behavior (auto, smooth)", "default": "auto"}
-                        },
-                        "required": ["element_id"]
+                        "properties": {},
+                        "required": []
                 }
         },
         {
@@ -577,13 +540,8 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Drag element from source to target location",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {
-                            "source_element_id": {"type": "string", "description": "Source element identifier"},
-                            "target_element_id": {"type": "string", "description": "Target element identifier"},
-                            "x_offset": {"type": "integer", "description": "X coordinate offset from target element center"},
-                            "y_offset": {"type": "integer", "description": "Y coordinate offset from target element center"}
-                        },
-                        "required": ["source_element_id", "target_element_id"]
+                        "properties": {},
+                        "required": []
                 }
         },
         {
@@ -1980,7 +1938,8 @@ async def get_element_property(element_id: str, property_name: str):
         if not element:
             raise ValueError(f"Element '{element_id}' not found")
         
-        # Find the tab by checking the element ID pattern (root_X means it belongs to 'root' which should be the active tab)
+        # WebElement doesn't have get_property, implement using JS execution
+        # Get the tab that contains this element
         tab = None
         if element_id.startswith('root_'):
             # Find the most recent tab session (should be the active one)
@@ -2285,7 +2244,7 @@ async def wait_for_element(
             
             # Wait before retry
             await asyncio.sleep(0.1)
-        
+
         return create_success_response(f"Element found using {selector_type}: {selector_value}")
     except Exception as e:
         return create_error_response(f"Wait for element failed: {str(e)}")
@@ -2326,7 +2285,7 @@ async def execute_script_on_element(tab_id: str, element_id: str, script: str, a
         
         # Execute script on the tab with element as first argument
         result = await tab.execute_script(processed_script, element)
-        
+
         return create_success_response(str(result) if result is not None else "null")
     except Exception as e:
         return create_error_response(f"Execute script on element failed: {str(e)}")
@@ -2766,7 +2725,7 @@ async def bypass_cloudflare(tab_id: str, url: str, timeout: int = 30):
         
         # Apply overall timeout to the entire bypass operation
         await asyncio.wait_for(_perform_bypass(), timeout=timeout)
-        
+
         return create_success_response(f"Cloudflare bypass completed for {url}")
     except asyncio.TimeoutError:
         return create_error_response(f"Cloudflare bypass timed out after {timeout} seconds")
