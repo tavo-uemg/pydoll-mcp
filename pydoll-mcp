@@ -435,8 +435,14 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Find a single element using various selector strategies",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "element_id": {"type": "string", "description": "Element identifier for scoped search"},
+                            "selector_type": {"type": "string", "description": "Selector type (css, xpath, id, name, tag, class)"},
+                            "selector_value": {"type": "string", "description": "Selector value/expression"},
+                            "timeout": {"type": "number", "description": "Timeout in seconds", "default": 10}
+                        },
+                        "required": ["tab_id", "element_id", "selector_type", "selector_value"]
                 }
         },
         {
@@ -459,8 +465,12 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Click an element using mouse simulation",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"},
+                            "button": {"type": "string", "description": "Mouse button (left, right, middle)", "default": "left"},
+                            "click_count": {"type": "integer", "description": "Number of clicks", "default": 1}
+                        },
+                        "required": ["element_id"]
                 }
         },
         {
@@ -468,8 +478,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Click element using JavaScript instead of mouse simulation",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"}
+                        },
+                        "required": ["element_id"]
                 }
         },
         {
@@ -477,8 +489,13 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Type text into an element",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"},
+                            "text": {"type": "string", "description": "Text to type"},
+                            "clear_first": {"type": "boolean", "description": "Clear existing text first", "default": false},
+                            "delay": {"type": "integer", "description": "Delay between keystrokes in milliseconds", "default": 0}
+                        },
+                        "required": ["element_id", "text"]
                 }
         },
         {
@@ -486,8 +503,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Clear text from an input element",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"}
+                        },
+                        "required": ["element_id"]
                 }
         },
         {
@@ -495,8 +514,12 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Press a specific key or key combination",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "key": {"type": "string", "description": "Key to press (e.g., 'enter', 'escape', 'tab')"},
+                            "element_id": {"type": "string", "description": "Optional element identifier to focus first"},
+                            "modifiers": {"type": "array", "items": {"type": "string"}, "description": "Modifier keys (ctrl, shift, alt, meta)"}
+                        },
+                        "required": ["key"]
                 }
         },
         {
@@ -504,8 +527,12 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Press and hold a key (without releasing)",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"},
+                            "key": {"type": "string", "description": "Key to press down"},
+                            "modifiers": {"type": "array", "items": {"type": "string"}, "description": "Modifier keys (ctrl, shift, alt, meta)"}
+                        },
+                        "required": ["element_id", "key"]
                 }
         },
         {
@@ -513,8 +540,11 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Release a previously pressed key",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"},
+                            "key": {"type": "string", "description": "Key to release"}
+                        },
+                        "required": ["element_id", "key"]
                 }
         },
         {
@@ -522,8 +552,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Hover mouse over an element",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"}
+                        },
+                        "required": ["element_id"]
                 }
         },
         {
@@ -531,8 +563,13 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Scroll element into view or by specific amount",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"},
+                            "x": {"type": "integer", "description": "Horizontal scroll offset"},
+                            "y": {"type": "integer", "description": "Vertical scroll offset"},
+                            "behavior": {"type": "string", "description": "Scroll behavior (auto, smooth)", "default": "auto"}
+                        },
+                        "required": ["element_id"]
                 }
         },
         {
@@ -540,8 +577,13 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Drag element from source to target location",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "source_element_id": {"type": "string", "description": "Source element identifier"},
+                            "target_element_id": {"type": "string", "description": "Target element identifier"},
+                            "x_offset": {"type": "integer", "description": "X coordinate offset from target element center"},
+                            "y_offset": {"type": "integer", "description": "Y coordinate offset from target element center"}
+                        },
+                        "required": ["source_element_id", "target_element_id"]
                 }
         },
         {
@@ -1938,17 +1980,36 @@ async def get_element_property(element_id: str, property_name: str):
         if not element:
             raise ValueError(f"Element '{element_id}' not found")
         
-        # WebElement doesn't have get_property, implement using JS execution
-        # Get the tab that contains this element
+        # Find the tab by checking the element ID pattern (root_X means it belongs to 'root' which should be the active tab)
         tab = None
-        for session_id, session in browser_sessions.items():
-            # Find which tab this element belongs to by checking if it's in cached_elements
-            break
+        if element_id.startswith('root_'):
+            # Find the most recent tab session (should be the active one)
+            if TAB_SESSIONS:
+                tab = list(TAB_SESSIONS.values())[-1]
         
-        if not tab:
-            # Use JS execution on the element to get property
-            script = f"return arguments[0].{property_name};"
-            # We need to find the tab for this element, for now return attribute instead
+        if tab:
+            # Use JS execution on the element to get property (PyDoll uses 'argument' not 'arguments[0]')
+            script = f"return argument.{property_name}"
+            result = await tab.execute_script(script, element)
+            
+            # Extract the actual value from the result object similar to execute_script_on_element
+            if hasattr(result, 'result') and hasattr(result.result, 'result') and hasattr(result.result.result, 'value'):
+                # Handle nested result structure from PyDoll: result.result.result.value
+                value = result.result.result.value
+            else:
+                # Fallback: convert to string and parse
+                result_str = str(result)
+                if "'value':" in result_str:
+                    import re
+                    match = re.search(r"'value':\s*'([^']*)'", result_str)
+                    if match:
+                        value = match.group(1)
+                    else:
+                        value = result_str
+                else:
+                    value = result_str
+        else:
+            # Fallback to attribute if we can't find the tab
             value = element.get_attribute(property_name)
         
         return create_success_response(str(value) if value is not None else "")
@@ -2189,19 +2250,41 @@ async def wait_for_element(
         
         by_type = selector_map[selector_type]
         
-        # Use the correct PyDoll find method with timeout parameter
-        if selector_type == "css":
-            element = await tab.find(css=selector_value, timeout=timeout)
-        elif selector_type == "xpath":
-            element = await tab.find(xpath=selector_value, timeout=timeout)
-        elif selector_type == "id":
-            element = await tab.find(id=selector_value, timeout=timeout)
-        elif selector_type == "name":
-            element = await tab.find(name=selector_value, timeout=timeout)
-        elif selector_type == "tag":
-            element = await tab.find(tag_name=selector_value, timeout=timeout)
-        elif selector_type == "class":
-            element = await tab.find(class_name=selector_value, timeout=timeout)
+        # Use PyDoll's wait_for method to actually wait for element to appear
+        import asyncio
+        start_time = asyncio.get_event_loop().time()
+        
+        while True:
+            try:
+                # Try to find the element using async methods with shorter timeout
+                if selector_type == "css":
+                    element = await tab.find(css=selector_value, timeout=0.5)
+                elif selector_type == "xpath":
+                    element = await tab.find(xpath=selector_value, timeout=0.5)
+                elif selector_type == "id":
+                    element = await tab.find(id=selector_value, timeout=0.5)
+                elif selector_type == "name":
+                    element = await tab.find(name=selector_value, timeout=0.5)
+                elif selector_type == "tag":
+                    element = await tab.find(tag_name=selector_value, timeout=0.5)
+                elif selector_type == "class":
+                    element = await tab.find(class_name=selector_value, timeout=0.5)
+                
+                # If element found and visible (if required), break
+                if element and (not visible or await element.is_displayed()):
+                    break
+                    
+            except Exception:
+                # Element not found, continue waiting
+                pass
+            
+            # Check timeout
+            current_time = asyncio.get_event_loop().time()
+            if current_time - start_time > timeout:
+                raise TimeoutError(f"Timed out waiting for element to appear")
+            
+            # Wait before retry
+            await asyncio.sleep(0.1)
         
         return create_success_response(f"Element found using {selector_type}: {selector_value}")
     except Exception as e:
@@ -2230,10 +2313,19 @@ async def execute_script_on_element(tab_id: str, element_id: str, script: str, a
         if not element:
             raise ValueError(f"Element '{element_id}' not found")
         
-        if args:
-            result = await element.execute_script(script, *args)
-        else:
-            result = await element.execute_script(script)
+        tab = get_tab_session(tab_id)
+        if not tab:
+            raise ValueError(f"Tab '{tab_id}' not found")
+        
+        # Convert arguments[0] to argument for PyDoll compatibility  
+        processed_script = script.replace('arguments[0]', 'argument')
+        
+        # Add return statement if not present
+        if not processed_script.strip().startswith('return'):
+            processed_script = f"return {processed_script}"
+        
+        # Execute script on the tab with element as first argument
+        result = await tab.execute_script(processed_script, element)
         
         return create_success_response(str(result) if result is not None else "null")
     except Exception as e:
@@ -2611,31 +2703,39 @@ async def wait_for_function(
         if not tab:
             raise ValueError(f"Tab '{tab_id}' not found")
         
-        # Implement wait_for_function using execute_script in a polling loop
-        import time
-        start_time = time.time()
-        
-        while (time.time() - start_time) < timeout:
-            try:
-                if args:
-                    result = await tab.execute_script(script, *args)
-                else:
-                    result = await tab.execute_script(script)
-                
-                # Check if result is truthy - handle various return value types
-                if result and 'result' in result and 'result' in result['result']:
-                    value = result['result']['result'].get('value')
+        # Implement wait_for_function using execute_script in a polling loop with proper async timing
+        async def _poll_function():
+            while True:
+                try:
+                    if args:
+                        result = await tab.execute_script(script, *args)
+                    else:
+                        result = await tab.execute_script(script)
+                    
+                    # Check if result is truthy - handle various return value types
+                    value = None
+                    if hasattr(result, 'result') and hasattr(result.result, 'value'):
+                        value = result.result.value
+                    elif isinstance(result, dict) and 'result' in result and 'result' in result['result']:
+                        value = result['result']['result'].get('value')
+                    elif result is not None:
+                        value = result
+                    
                     # JavaScript truthy check: not null, not undefined, not false, not 0, not ""
                     if value is not None and value is not False and value != 0 and value != "":
-                        return create_success_response(str(result))
-                
-                await asyncio.sleep(polling / 1000.0)  # Convert ms to seconds
-            except Exception:
-                await asyncio.sleep(polling / 1000.0)
+                        return result
+                    
+                    await asyncio.sleep(polling / 1000.0)  # Convert ms to seconds
+                except Exception as e:
+                    # Continue polling even if individual script execution fails
+                    await asyncio.sleep(polling / 1000.0)
         
-        raise TimeoutError(f"Function did not return truthy value within {timeout} seconds")
-        
+        # Apply timeout to the polling function
+        result = await asyncio.wait_for(_poll_function(), timeout=timeout)
         return create_success_response(str(result) if result is not None else "null")
+        
+    except asyncio.TimeoutError:
+        return create_error_response(f"Function did not return truthy value within {timeout} seconds")
     except Exception as e:
         return create_error_response(f"Wait for function failed: {str(e)}")
 
@@ -2646,22 +2746,30 @@ async def bypass_cloudflare(tab_id: str, url: str, timeout: int = 30):
         if not tab:
             raise ValueError(f"Tab '{tab_id}' not found")
         
-        # Navigate to the URL first, then use the context manager to bypass cloudflare
-        await tab.go_to(url)
-        async with tab.expect_and_bypass_cloudflare_captcha(
-            time_before_click=2,
-            time_to_wait_captcha=timeout
-        ):
-            # Wait for the bypass to complete with proper timeout handling
-            try:
-                await asyncio.wait_for(
-                    asyncio.sleep(0.1),  # Small delay to let the context manager work
-                    timeout=timeout
-                )
-            except asyncio.TimeoutError:
-                pass  # Expected when timeout is reached
+        # Use a more robust approach with asyncio.wait_for to ensure timeout is respected
+        async def _perform_bypass():
+            # Navigate to the URL first, then use the context manager to bypass cloudflare
+            await tab.go_to(url)
+            
+            # Wait for page load before attempting bypass
+            await tab.wait_for_load_state('networkidle', timeout=10000)
+            
+            async with tab.expect_and_bypass_cloudflare_captcha(
+                time_before_click=2,
+                time_to_wait_captcha=timeout
+            ):
+                # Wait for the bypass process to stabilize
+                await asyncio.sleep(5)
+            
+            # Give additional time for post-bypass processing
+            await asyncio.sleep(3)
+        
+        # Apply overall timeout to the entire bypass operation
+        await asyncio.wait_for(_perform_bypass(), timeout=timeout)
         
         return create_success_response(f"Cloudflare bypass completed for {url}")
+    except asyncio.TimeoutError:
+        return create_error_response(f"Cloudflare bypass timed out after {timeout} seconds")
     except Exception as e:
         return create_error_response(f"Cloudflare bypass failed: {str(e)}")
 
