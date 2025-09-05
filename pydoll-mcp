@@ -1973,16 +1973,8 @@ async def get_element_html(element_id: str, outer_html: bool = False):
 
 async def get_element_bounds(element_id: str):
     """Get element position and dimensions."""
-    try:
-        element = get_element(element_id)
-        if not element:
-            raise ValueError(f"Element '{element_id}' not found")
-        
-        bounds = await element.bounds()
-        
-        return create_success_response(json.dumps(bounds, indent=2))
-    except Exception as e:
-        return create_error_response(f"Get element bounds failed: {str(e)}")
+    # Delegate to the JS method which works reliably
+    return await get_element_bounds_js(element_id)
 
 async def get_element_bounds_js(element_id: str):
     """Get element bounds using JavaScript method."""
@@ -2350,8 +2342,7 @@ async def save_pdf(
     file_path: str,
     landscape: bool = False,
     print_background: bool = False,
-    scale: float = 1.0,
-    page_ranges: Optional[str] = None
+    scale: float = 1.0
 ):
     """Save page as PDF document."""
     try:
@@ -2359,19 +2350,14 @@ async def save_pdf(
         if not tab:
             raise ValueError(f"Tab '{tab_id}' not found")
         
-        pdf_data = await tab.print_to_pdf(
+        await tab.print_to_pdf(
+            path=file_path,
             landscape=landscape,
             print_background=print_background,
-            scale=scale,
-            page_ranges=page_ranges
+            scale=scale
         )
         
-        # Save to temporary file and return path
-        with tempfile.NamedTemporaryFile(suffix='.pdf', delete=False) as tmp_file:
-            tmp_file.write(pdf_data)
-            pdf_path = tmp_file.name
-        
-        return create_success_response(f"PDF saved to: {pdf_path}")
+        return create_success_response(f"PDF saved to: {file_path}")
     except Exception as e:
         return create_error_response(f"Save PDF failed: {str(e)}")
 
@@ -2636,9 +2622,12 @@ async def wait_for_function(
                 else:
                     result = await tab.execute_script(script)
                 
-                # Check if result is truthy
-                if result and result.get('result', {}).get('result', {}).get('value'):
-                    return create_success_response(str(result))
+                # Check if result is truthy - handle various return value types
+                if result and 'result' in result and 'result' in result['result']:
+                    value = result['result']['result'].get('value')
+                    # JavaScript truthy check: not null, not undefined, not false, not 0, not ""
+                    if value is not None and value is not False and value != 0 and value != "":
+                        return create_success_response(str(result))
                 
                 await asyncio.sleep(polling / 1000.0)  # Convert ms to seconds
             except Exception:
@@ -3098,13 +3087,38 @@ async def get_network_logs(tab_id: str, filter_pattern: Optional[str] = None, li
         
         log_data = []
         for log_entry in logs:
-            log_data.append({
-                "url": getattr(log_entry, 'url', None),
-                "method": getattr(log_entry, 'method', None),
-                "status": getattr(log_entry, 'status', None),
-                "timestamp": getattr(log_entry, 'timestamp', None),
-                "request_id": getattr(log_entry, 'requestId', None)
-            })
+            # Handle different log entry formats (raw events vs structured objects)
+            if isinstance(log_entry, dict):
+                # Extract from network event format
+                if 'params' in log_entry:
+                    params = log_entry['params']
+                    request = params.get('request', {})
+                    response = params.get('response', {})
+                    log_data.append({
+                        "url": request.get('url') or response.get('url'),
+                        "method": request.get('method'),
+                        "status": response.get('status'),
+                        "timestamp": params.get('timestamp'),
+                        "request_id": params.get('requestId')
+                    })
+                else:
+                    # Direct format
+                    log_data.append({
+                        "url": log_entry.get('url'),
+                        "method": log_entry.get('method'),
+                        "status": log_entry.get('status'),
+                        "timestamp": log_entry.get('timestamp'),
+                        "request_id": log_entry.get('requestId') or log_entry.get('request_id')
+                    })
+            else:
+                # Object with attributes
+                log_data.append({
+                    "url": getattr(log_entry, 'url', None),
+                    "method": getattr(log_entry, 'method', None),
+                    "status": getattr(log_entry, 'status', None),
+                    "timestamp": getattr(log_entry, 'timestamp', None),
+                    "request_id": getattr(log_entry, 'requestId', None) or getattr(log_entry, 'request_id', None)
+                })
         
         return create_success_response(json.dumps(log_data, indent=2, default=str))
     except Exception as e:
