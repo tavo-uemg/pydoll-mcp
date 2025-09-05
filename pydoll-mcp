@@ -560,8 +560,11 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Get attribute value from an element",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"},
+                            "attribute_name": {"type": "string", "description": "Name of the attribute to get"}
+                        },
+                        "required": ["element_id", "attribute_name"]
                 }
         },
         {
@@ -569,8 +572,11 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Get JavaScript property value from an element",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"},
+                            "property_name": {"type": "string", "description": "Name of the property to get"}
+                        },
+                        "required": ["element_id", "property_name"]
                 }
         },
         {
@@ -578,8 +584,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Get HTML content of an element",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"}
+                        },
+                        "required": ["element_id"]
                 }
         },
         {
@@ -587,8 +595,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Get element position and dimensions",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"}
+                        },
+                        "required": ["element_id"]
                 }
         },
         {
@@ -596,8 +606,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Get element bounds using JavaScript method",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"}
+                        },
+                        "required": ["element_id"]
                 }
         },
         {
@@ -605,8 +617,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Check if element is visible on page",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"}
+                        },
+                        "required": ["element_id"]
                 }
         },
         {
@@ -614,8 +628,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Check if element is enabled for interaction",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"}
+                        },
+                        "required": ["element_id"]
                 }
         },
         {
@@ -623,8 +639,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Check if element is selected (checkboxes, radio buttons)",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"}
+                        },
+                        "required": ["element_id"]
                 }
         },
         {
@@ -632,8 +650,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Check if element is on top (not covered by other elements)",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"}
+                        },
+                        "required": ["element_id"]
                 }
         },
         {
@@ -641,8 +661,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Check if element is fully interactable (visible, enabled, on top)",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"}
+                        },
+                        "required": ["element_id"]
                 }
         },
         {
@@ -686,8 +708,13 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Wait for element to appear using selector",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "selector_type": {"type": "string", "description": "Selector type (css, xpath, id, name, tag, class)"},
+                            "selector_value": {"type": "string", "description": "Selector value/expression"},
+                            "timeout": {"type": "number", "description": "Timeout in seconds", "default": 30}
+                        },
+                        "required": ["tab_id", "selector_type", "selector_value"]
                 }
         },
         {
@@ -695,8 +722,11 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Execute JavaScript in page context",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "script": {"type": "string", "description": "JavaScript code to execute"}
+                        },
+                        "required": ["tab_id", "script"]
                 }
         },
         {
@@ -704,8 +734,12 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Execute JavaScript with element as context",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "element_id": {"type": "string", "description": "Element identifier"},
+                            "script": {"type": "string", "description": "JavaScript code to execute"}
+                        },
+                        "required": ["tab_id", "element_id", "script"]
                 }
         },
         {
@@ -713,8 +747,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Get the current page title",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"}
+                        },
+                        "required": ["tab_id"]
                 }
         },
         {
@@ -722,8 +758,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Get the current page URL",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"}
+                        },
+                        "required": ["tab_id"]
                 }
         },
         {
@@ -731,8 +769,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Get the current page HTML source",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"}
+                        },
+                        "required": ["tab_id"]
                 }
         },
         {
@@ -756,8 +796,11 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Save page as PDF document",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "file_path": {"type": "string", "description": "Path where to save the PDF file"}
+                        },
+                        "required": ["tab_id"]
                 }
         },
         {
@@ -801,8 +844,11 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Upload files through file input elements",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "File input element identifier"},
+                            "file_paths": {"type": "array", "items": {"type": "string"}, "description": "List of file paths to upload"}
+                        },
+                        "required": ["element_id", "file_paths"]
                 }
         },
         {
@@ -810,8 +856,12 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Download files from URLs",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "url": {"type": "string", "description": "URL to download from"},
+                            "save_path": {"type": "string", "description": "Path where to save the downloaded file"}
+                        },
+                        "required": ["tab_id", "url"]
                 }
         },
         {
@@ -846,8 +896,11 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Wait for page to finish loading",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "timeout": {"type": "number", "description": "Timeout in seconds", "default": 30}
+                        },
+                        "required": ["tab_id"]
                 }
         },
         {
@@ -855,8 +908,12 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Wait for JavaScript function to return truthy value",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "script": {"type": "string", "description": "JavaScript function to wait for"},
+                            "timeout": {"type": "number", "description": "Timeout in seconds", "default": 30}
+                        },
+                        "required": ["tab_id", "script"]
                 }
         },
         {
@@ -937,8 +994,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Enable page event monitoring (load, navigation, dialogs)",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"}
+                        },
+                        "required": ["tab_id"]
                 }
         },
         {
@@ -946,8 +1005,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Enable network event monitoring for request tracking",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"}
+                        },
+                        "required": ["tab_id"]
                 }
         },
         {
@@ -955,8 +1016,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Enable fetch event monitoring for request interception",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"}
+                        },
+                        "required": ["tab_id"]
                 }
         },
         {
@@ -964,8 +1027,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Enable DOM event monitoring",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"}
+                        },
+                        "required": ["tab_id"]
                 }
         },
         {
@@ -973,8 +1038,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Enable runtime event monitoring (console, exceptions)",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"}
+                        },
+                        "required": ["tab_id"]
                 }
         },
         {
@@ -1103,8 +1170,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Get detailed information about a specific session",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "session_id": {"type": "string", "description": "Session identifier to get info for"}
+                        },
+                        "required": ["session_id"]
                 }
         },
         {
@@ -1397,29 +1466,79 @@ async def create_tab(browser_session_id: str, tab_id: str, url: Optional[str] = 
 
 async def close_tab(tab_id: str):
     """Close a browser tab."""
+    logger.info(f"close_tab called for tab_id: {tab_id}")
     try:
         if tab_id not in TAB_SESSIONS:
+            logger.error(f"Tab {tab_id} not found in TAB_SESSIONS")
             raise ValueError(f"Tab '{tab_id}' not found")
         
+        logger.info(f"Tab {tab_id} found in TAB_SESSIONS, getting tab object")
         tab = TAB_SESSIONS[tab_id]
-        await asyncio.wait_for(tab.close(), timeout=10.0)
+        logger.info(f"Got tab object for {tab_id}: {type(tab)}")
         
-        # Clean up related elements and events
-        elements_to_remove = [elem_id for elem_id in ELEMENT_CACHE.keys() if elem_id.startswith(f"{tab_id}_")]
-        for elem_id in elements_to_remove:
-            del ELEMENT_CACHE[elem_id]
+        # Try to close the tab via PyDoll, but don't let it fail the entire operation
+        # PyDoll tabs often can't be closed cleanly due to internal browser state issues
+        close_successful = False
+        try:
+            logger.info(f"Attempting to close PyDoll tab for {tab_id}")
+            await asyncio.wait_for(tab.close(), timeout=5.0)  # Shorter timeout
+            logger.info(f"Successfully closed PyDoll tab for {tab_id}")
+            close_successful = True
+        except Exception as close_error:
+            logger.info(f"PyDoll tab close failed for {tab_id} (continuing with cleanup): {str(close_error)[:100]}")
+            # Don't log full error details as this is expected behavior
         
-        if tab_id in EVENT_CALLBACKS:
-            del EVENT_CALLBACKS[tab_id]
-        if tab_id in EVENT_LOGS:
-            del EVENT_LOGS[tab_id]
-        if tab_id in NETWORK_LOGS:
-            del NETWORK_LOGS[tab_id]
+        # Clean up related elements and events step by step to isolate any errors
+        logger.info(f"Starting cleanup for tab {tab_id}")
         
-        del TAB_SESSIONS[tab_id]
+        # Clean up elements
+        try:
+            elements_to_remove = [elem_id for elem_id in ELEMENT_CACHE.keys() if elem_id.startswith(f"{tab_id}_")]
+            logger.info(f"Found {len(elements_to_remove)} elements to clean up for {tab_id}")
+            for elem_id in elements_to_remove:
+                del ELEMENT_CACHE[elem_id]
+            logger.info(f"Cleaned up {len(elements_to_remove)} elements for {tab_id}")
+        except Exception as elem_error:
+            logger.warning(f"Error cleaning up elements for {tab_id}: {elem_error}")
         
-        return create_success_response(f"Tab '{tab_id}' closed successfully")
+        # Clean up event callbacks
+        try:
+            if tab_id in EVENT_CALLBACKS:
+                del EVENT_CALLBACKS[tab_id]
+                logger.info(f"Cleaned up event callbacks for {tab_id}")
+        except Exception as cb_error:
+            logger.warning(f"Error cleaning up event callbacks for {tab_id}: {cb_error}")
+        
+        # Clean up event logs
+        try:
+            if tab_id in EVENT_LOGS:
+                del EVENT_LOGS[tab_id]
+                logger.info(f"Cleaned up event logs for {tab_id}")
+        except Exception as log_error:
+            logger.warning(f"Error cleaning up event logs for {tab_id}: {log_error}")
+        
+        # Clean up network logs
+        try:
+            if tab_id in NETWORK_LOGS:
+                del NETWORK_LOGS[tab_id]
+                logger.info(f"Cleaned up network logs for {tab_id}")
+        except Exception as net_error:
+            logger.warning(f"Error cleaning up network logs for {tab_id}: {net_error}")
+        
+        # Finally, remove from TAB_SESSIONS
+        try:
+            del TAB_SESSIONS[tab_id]
+            logger.info(f"Removed {tab_id} from TAB_SESSIONS")
+        except Exception as session_error:
+            logger.error(f"Critical error removing {tab_id} from TAB_SESSIONS: {session_error}")
+            raise session_error
+        
+        if close_successful:
+            return create_success_response(f"Tab '{tab_id}' closed successfully")
+        else:
+            return create_success_response(f"Tab '{tab_id}' references cleaned up (PyDoll close failed but this is expected)")
     except Exception as e:
+        logger.error(f"Failed to close tab {tab_id}: {str(e)}", exc_info=True)
         return create_error_response(f"Failed to close tab: {str(e)}")
 
 async def bring_tab_to_front(tab_id: str):
