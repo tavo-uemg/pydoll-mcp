@@ -4,8 +4,8 @@ Pytest configuration and shared fixtures for PyDoll MCP testing.
 import asyncio
 import json
 import sys
+from collections.abc import AsyncGenerator
 from pathlib import Path
-from typing import AsyncGenerator
 
 import pytest
 import pytest_asyncio
@@ -184,8 +184,8 @@ def cleanup_temp_files():
     for file_path in temp_files:
         try:
             Path(file_path).unlink(missing_ok=True)
-        except Exception:
-            pass  # Ignore cleanup errors
+        except Exception as e:
+            print(f"Warning: Failed to cleanup temp file {file_path}: {e}")
 
 
 @pytest.fixture
