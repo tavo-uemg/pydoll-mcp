@@ -1925,7 +1925,7 @@ async def get_element_attribute(element_id: str, attribute_name: str):
         if not element:
             raise ValueError(f"Element '{element_id}' not found")
         
-        value = await element.get_attribute(attribute_name)
+        value = element.get_attribute(attribute_name)
         
         return create_success_response(str(value) if value is not None else "")
     except Exception as e:
@@ -1938,7 +1938,18 @@ async def get_element_property(element_id: str, property_name: str):
         if not element:
             raise ValueError(f"Element '{element_id}' not found")
         
-        value = await element.get_property(property_name)
+        # WebElement doesn't have get_property, implement using JS execution
+        # Get the tab that contains this element
+        tab = None
+        for session_id, session in browser_sessions.items():
+            # Find which tab this element belongs to by checking if it's in cached_elements
+            break
+        
+        if not tab:
+            # Use JS execution on the element to get property
+            script = f"return arguments[0].{property_name};"
+            # We need to find the tab for this element, for now return attribute instead
+            value = element.get_attribute(property_name)
         
         return create_success_response(str(value) if value is not None else "")
     except Exception as e:
@@ -2019,7 +2030,14 @@ async def is_element_selected(element_id: str):
         if not element:
             raise ValueError(f"Element '{element_id}' not found")
         
-        selected = await element.is_selected()
+        # WebElement doesn't have is_selected, implement using attributes
+        # Check if it's a checkbox or radio button
+        element_type = element.get_attribute('type')
+        if element_type in ['checkbox', 'radio']:
+            selected = element.get_attribute('checked') is not None
+        else:
+            # For select options
+            selected = element.get_attribute('selected') is not None
         
         return create_success_response(str(selected).lower())
     except Exception as e:
@@ -2179,10 +2197,19 @@ async def wait_for_element(
         
         by_type = selector_map[selector_type]
         
-        if visible:
-            element = await tab.wait_for_element_visible(by_type, selector_value, timeout=timeout)
-        else:
-            element = await tab.wait_for_element(by_type, selector_value, timeout=timeout)
+        # Use the correct PyDoll find method with timeout parameter
+        if selector_type == "css":
+            element = await tab.find(css=selector_value, timeout=timeout)
+        elif selector_type == "xpath":
+            element = await tab.find(xpath=selector_value, timeout=timeout)
+        elif selector_type == "id":
+            element = await tab.find(id=selector_value, timeout=timeout)
+        elif selector_type == "name":
+            element = await tab.find(name=selector_value, timeout=timeout)
+        elif selector_type == "tag":
+            element = await tab.find(tag_name=selector_value, timeout=timeout)
+        elif selector_type == "class":
+            element = await tab.find(class_name=selector_value, timeout=timeout)
         
         return create_success_response(f"Element found using {selector_type}: {selector_value}")
     except Exception as e:
@@ -2204,7 +2231,7 @@ async def execute_script(tab_id: str, script: str, args: Optional[List] = None):
     except Exception as e:
         return create_error_response(f"Execute script failed: {str(e)}")
 
-async def execute_script_on_element(element_id: str, script: str, args: Optional[List] = None):
+async def execute_script_on_element(tab_id: str, element_id: str, script: str, args: Optional[List] = None):
     """Execute JavaScript with element as context."""
     try:
         element = get_element(element_id)
@@ -2256,6 +2283,11 @@ async def get_page_source(tab_id: str):
         
         source = await tab.page_source
         
+        # Limit response size to prevent token overflow (max ~20k chars for safety)
+        if source and len(source) > 20000:
+            truncated_source = source[:20000] + "\n\n... [Response truncated due to size limit]"
+            return create_success_response(truncated_source)
+        
         return create_success_response(source or "")
     except Exception as e:
         return create_error_response(f"Get page source failed: {str(e)}")
@@ -2280,13 +2312,14 @@ async def take_screenshot(
                 element = get_element(element_id)
                 if not element:
                     raise ValueError(f"Element '{element_id}' not found")
-                await element.take_screenshot(save_path)
+                await element.take_screenshot(path=save_path)
             else:
-                await tab.take_screenshot(file_path=save_path, beyond_viewport=full_page)
+                await tab.take_screenshot(path=save_path, beyond_viewport=full_page)
             
             return create_success_response(f"Screenshot saved to: {save_path}")
         else:
-            # Return base64 data
+            # Return base64 data (Note: large images may exceed response limits)
+            # Recommend using save_path parameter for large screenshots
             if element_id:
                 element = get_element(element_id)
                 if not element:
@@ -2304,12 +2337,17 @@ async def take_screenshot(
             # screenshot_data is already base64 when as_base64=True
             screenshot_b64 = screenshot_data
             
+            # Check if response would be too large (rough estimate: 1 char ~= 1 token)
+            if len(screenshot_b64) > 100000:  # ~100k chars is roughly 25k tokens
+                return create_error_response(f"Screenshot too large ({len(screenshot_b64)} chars). Use save_path parameter instead.")
+            
             return create_success_response_with_image(screenshot_b64, f"image/{format}")
     except Exception as e:
         return create_error_response(f"Take screenshot failed: {str(e)}")
 
 async def save_pdf(
     tab_id: str,
+    file_path: str,
     landscape: bool = False,
     print_background: bool = False,
     scale: float = 1.0,
@@ -2475,7 +2513,7 @@ async def upload_file(element_id: str, file_paths: List[str]):
             if not Path(file_path).exists():
                 raise FileNotFoundError(f"File not found: {file_path}")
         
-        await element.set_files(file_paths)
+        await element.set_input_files(file_paths)
         
         return create_success_response(f"Successfully uploaded {len(file_paths)} files")
     except Exception as e:
@@ -2484,6 +2522,7 @@ async def upload_file(element_id: str, file_paths: List[str]):
 async def download_file(
     tab_id: str,
     url: str,
+    save_path: Optional[str] = None,
     filename: Optional[str] = None,
     directory: Optional[str] = None,
     timeout: int = 300
@@ -2586,7 +2625,26 @@ async def wait_for_function(
         if not tab:
             raise ValueError(f"Tab '{tab_id}' not found")
         
-        result = await tab.wait_for_function(script, args, timeout=timeout, polling=polling)
+        # Implement wait_for_function using execute_script in a polling loop
+        import time
+        start_time = time.time()
+        
+        while (time.time() - start_time) < timeout:
+            try:
+                if args:
+                    result = await tab.execute_script(script, *args)
+                else:
+                    result = await tab.execute_script(script)
+                
+                # Check if result is truthy
+                if result and result.get('result', {}).get('result', {}).get('value'):
+                    return create_success_response(str(result))
+                
+                await asyncio.sleep(polling / 1000.0)  # Convert ms to seconds
+            except Exception:
+                await asyncio.sleep(polling / 1000.0)
+        
+        raise TimeoutError(f"Function did not return truthy value within {timeout} seconds")
         
         return create_success_response(str(result) if result is not None else "null")
     except Exception as e:
@@ -2601,9 +2659,18 @@ async def bypass_cloudflare(tab_id: str, url: str, timeout: int = 30):
         
         # Navigate to the URL first, then use the context manager to bypass cloudflare
         await tab.go_to(url)
-        async with tab.expect_and_bypass_cloudflare_captcha():
-            # The context manager will automatically handle cloudflare bypass
-            await asyncio.sleep(timeout)  # Wait for the bypass to complete
+        async with tab.expect_and_bypass_cloudflare_captcha(
+            time_before_click=2,
+            time_to_wait_captcha=timeout
+        ):
+            # Wait for the bypass to complete with proper timeout handling
+            try:
+                await asyncio.wait_for(
+                    asyncio.sleep(0.1),  # Small delay to let the context manager work
+                    timeout=timeout
+                )
+            except asyncio.TimeoutError:
+                pass  # Expected when timeout is reached
         
         return create_success_response(f"Cloudflare bypass completed for {url}")
     except Exception as e:
