@@ -3,15 +3,13 @@ Pytest configuration and shared fixtures for PyDoll MCP testing.
 """
 import asyncio
 import json
-import subprocess
 import sys
-import time
 from pathlib import Path
-from typing import AsyncGenerator, Generator
+from typing import AsyncGenerator
 
 import pytest
 import pytest_asyncio
-from unittest.mock import Mock, AsyncMock
+from unittest.mock import AsyncMock, Mock
 
 
 @pytest.fixture(scope="session")
@@ -91,11 +89,11 @@ def test_html_content():
 
 class MCPTestClient:
     """Test client for interacting with MCP server."""
-    
+
     def __init__(self, server_path: str):
         self.server_path = server_path
         self.process = None
-        
+
     async def start(self):
         """Start the MCP server process."""
         self.process = await asyncio.create_subprocess_exec(
@@ -104,19 +102,19 @@ class MCPTestClient:
             stdout=asyncio.subprocess.PIPE,
             stderr=asyncio.subprocess.PIPE
         )
-        
+
     async def send_request(self, request: dict) -> dict:
         """Send JSON-RPC request to server."""
         if not self.process:
             raise RuntimeError("Server not started")
-            
+
         request_json = json.dumps(request) + "\n"
         self.process.stdin.write(request_json.encode())
         await self.process.stdin.drain()
-        
+
         response_line = await self.process.stdout.readline()
         return json.loads(response_line.decode())
-        
+
     async def stop(self):
         """Stop the MCP server process."""
         if self.process:
@@ -129,7 +127,7 @@ async def mcp_client() -> AsyncGenerator[MCPTestClient, None]:
     """Create and manage MCP test client."""
     server_path = Path(__file__).parent.parent / "pydoll-mcp"
     client = MCPTestClient(str(server_path))
-    
+
     try:
         await client.start()
         # Give server time to start
@@ -181,7 +179,7 @@ def cleanup_temp_files():
     """Clean up temporary files after each test."""
     temp_files = []
     yield temp_files
-    
+
     # Cleanup after test
     for file_path in temp_files:
         try:
