@@ -123,23 +123,23 @@ class MCPTestClient:
 
             # Wait for response with timeout
             response_line = await asyncio.wait_for(
-                self.process.stdout.readline(), 
+                self.process.stdout.readline(),
                 timeout=10.0
             )
-            
+
             if not response_line:
                 raise RuntimeError("Server closed connection")
-                
+
             response_text = response_line.decode().strip()
             if not response_text:
                 raise RuntimeError("Empty response from server")
-                
+
             return json.loads(response_text)
-            
+
         except json.JSONDecodeError as e:
-            raise RuntimeError(f"Invalid JSON response: {e}")
-        except asyncio.TimeoutError:
-            raise RuntimeError("Server response timeout")
+            raise RuntimeError(f"Invalid JSON response: {e}") from e
+        except asyncio.TimeoutError as e:
+            raise RuntimeError("Server response timeout") from e
 
     async def stop(self):
         """Stop the MCP server process."""
@@ -152,16 +152,16 @@ class MCPTestClient:
 async def mcp_client() -> AsyncGenerator[MCPTestClient, None]:
     """Create and manage MCP test client."""
     server_path = Path(__file__).parent.parent / "pydoll-mcp"
-    
+
     # Skip if server doesn't exist or isn't executable
     if not server_path.exists():
         pytest.skip(f"PyDoll MCP server not found at {server_path}")
-    
+
     client = MCPTestClient(str(server_path))
 
     try:
         await client.start()
-        
+
         # Test basic connectivity with a simple request
         try:
             test_request = {
@@ -172,7 +172,7 @@ async def mcp_client() -> AsyncGenerator[MCPTestClient, None]:
             await client.send_request(test_request)
         except Exception as e:
             pytest.skip(f"MCP server not responding: {e}")
-        
+
         yield client
     except Exception as e:
         pytest.skip(f"Failed to start MCP server: {e}")
