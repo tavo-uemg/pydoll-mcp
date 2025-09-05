@@ -49,7 +49,7 @@ class TestEndToEndWorkflows:
             assert "result" in start_response or "error" in start_response
 
             # 3. Create tab and navigate
-            tab_response = await mcp_client.send_request({
+            await mcp_client.send_request({
                 "jsonrpc": "2.0",
                 "id": 3,
                 "method": "tools/call",
@@ -64,7 +64,7 @@ class TestEndToEndWorkflows:
             })
 
             # 4. Get page information
-            url_response = await mcp_client.send_request({
+            await mcp_client.send_request({
                 "jsonrpc": "2.0",
                 "id": 4,
                 "method": "tools/call",
@@ -75,7 +75,7 @@ class TestEndToEndWorkflows:
             })
 
             # 5. Find elements
-            elements_response = await mcp_client.send_request({
+            await mcp_client.send_request({
                 "jsonrpc": "2.0",
                 "id": 5,
                 "method": "tools/call",
