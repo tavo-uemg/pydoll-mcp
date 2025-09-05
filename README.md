@@ -255,33 +255,6 @@ The PyDoll MCP Server provides detailed error messages for common scenarios:
 - **Chrome DevTools Protocol**: Uses CDP for reliable automation
 - **Cross-platform**: Works on Windows, macOS, and Linux
 
-## Security Features
-
-- **Cloudflare Bypass**: Handles modern bot detection systems
-- **Request Interception**: Full control over network traffic
-- **Cookie Management**: Secure cookie handling and persistence
-- **Proxy Support**: Route traffic through proxy servers
-- **User Agent Spoofing**: Customize browser identification
-
-## Use Cases
-
-- **Web Scraping**: Extract data from dynamic websites
-- **Automated Testing**: E2E testing of web applications
-- **Performance Monitoring**: Track page load times and network activity
-- **Content Generation**: Capture screenshots and generate PDFs
-- **Bot Detection Bypass**: Navigate protected sites automatically
-- **Data Collection**: Gather structured data from multiple sources
-
-## Troubleshooting
-
-### Common Issues
-
-1. **Chrome not found**: Ensure Chrome/Chromium is installed and accessible
-2. **Permission errors**: Check that the pydoll-mcp binary has execute permissions
-3. **Network timeouts**: Increase timeout values for slow pages
-4. **Element not found**: Use wait conditions before element interaction
-5. **Memory usage**: Close unused sessions and tabs regularly
-
 ### Debug Mode
 
 Enable verbose logging by examining network events and runtime errors:
@@ -290,14 +263,6 @@ Enable verbose logging by examining network events and runtime errors:
 enable_runtime_events(tab_id=tab_id)
 logs = get_event_logs(tab_id=tab_id)
 ```
-
-## Contributing
-
-This is a closed-source MCP server implementation. For issues or feature requests, please contact the development team.
-
-## License
-
-Proprietary software. All rights reserved.
 
 ---
 
