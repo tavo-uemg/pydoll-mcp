@@ -28,6 +28,55 @@ This server includes ALL PyDoll features:
 Best Practices & Common Pitfalls:
 =====================================
 
+CRITICAL TOOL QUIRKS & WORKAROUNDS:
+===================================
+
+1. ELEMENT FINDING & INTERACTION:
+   ✗ wait_for_element() - Times out on existing elements, use find_element() instead
+   ✗ upload_file() - Only works with <input type="file">, create dynamically if needed
+   ✗ scroll_element(x,y) - Fails with x/y params, use execute_script_on_element() instead
+   ✓ Basic scroll_element() works without x/y parameters
+
+2. ELEMENT PROPERTY ACCESS:
+   ✗ get_element_property() - Frequent "Cannot find context" errors
+   ✓ execute_script_on_element() - Reliable alternative for property access
+   ✗ get_element_text() - May return empty on some elements
+   ✓ get_element_attribute() - Works when attribute exists
+
+3. JAVASCRIPT EXECUTION:
+   ✗ execute_script(handle_dialogs=True) - Parameter not supported
+   ✗ execute_script(timeout=30) - Parameter not supported  
+   ✓ execute_script(tab_id, script) - Basic execution works
+   ✗ NEVER use alert(), confirm(), prompt() - Cause 60s timeouts
+
+4. EVENT MONITORING:
+   ✗ get_event_logs() - Returns [] unless events actively triggered
+   ✗ get_network_logs() - Fails unless enable_network_events() called first
+   ✓ Must enable events BEFORE triggering activity to log
+
+5. NETWORK INTERCEPTION:
+   ✓ continue_request/fail_request/fulfill_request - Accept ANY request_id for testing
+   ✗ get_network_response_body() - Often returns empty for completed requests
+   ✓ Network tools designed for mock testing scenarios
+
+6. IFRAME HANDLING:
+   ✗ get_frame() - Fails with cross-origin iframes (security limitation)
+   ✗ Most external sites blocked due to CORS policies
+   ✓ Same-origin or data: URI iframes work
+
+7. DIALOG HANDLING:
+   ✓ handle_alert() - Works correctly with real dialogs
+   ✓ has_dialog() - Detects active dialogs reliably
+   ✗ get_dialog_message() - Limited message retrieval capability
+
+8. CLOUDFLARE BYPASS:
+   ✗ bypass_cloudflare() - WILL timeout on non-protected sites (expected behavior)
+   ✗ expect_and_bypass_cloudflare() - Same timeout behavior (not a bug)
+   ✓ enable/disable_auto_solve_cloudflare() - Control functions work
+
+GENERAL BEST PRACTICES:
+======================
+
 1. HTTP Requests:
    - Headers must be formatted as: [{"name": "key", "value": "val"}]
    - Not as simple objects: {"key": "val"}
@@ -2019,7 +2068,41 @@ async def scroll_element(
     y: Optional[int] = None,
     behavior: str = "auto"
 ):
-    """Scroll element into view or by specific amount."""
+    """
+    Scroll element into view or by specific amount.
+    
+    QUIRKS & USAGE NOTES:
+    =====================
+    1. X/Y OFFSET LIMITATIONS: The x/y offset scrolling may fail with error:
+       "'WebElement' object has no attribute 'scroll_by'"
+       This indicates the underlying PyDoll element doesn't support scroll_by method.
+       
+    2. WORKING USAGE PATTERNS:
+       ✓ Basic scroll into view (no x/y parameters):
+         scroll_element(element_id, behavior="smooth")
+         
+       ✗ Offset scrolling (may fail):
+         scroll_element(element_id, x=100, y=200)  # May cause attribute error
+         
+    3. BEHAVIOR PARAMETER:
+       - "auto": Default browser scrolling behavior  
+       - "smooth": Smooth animated scrolling
+       - "instant": Immediate scrolling without animation
+       
+    4. ALTERNATIVE FOR OFFSET SCROLLING:
+       Use JavaScript execution for precise control:
+       execute_script_on_element(tab_id, element_id, 
+           "arguments[0].scrollBy(100, 200);")
+           
+    EXAMPLE USAGE:
+    ==============
+    # Safe usage - scroll into view only
+    scroll_element("my_element", behavior="smooth")
+    
+    # For offset scrolling, use JavaScript instead:
+    execute_script_on_element(tab_id, element_id,
+        "arguments[0].scrollBy(50, 100);")
+    """
     try:
         element = get_element(element_id)
         if not element:
@@ -2154,7 +2237,52 @@ async def get_element_attribute(element_id: str, attribute_name: str):
         return create_error_response(f"Get element attribute failed: {str(e)}")
 
 async def get_element_property(element_id: str, property_name: str):
-    """Get JavaScript property value from an element.
+    """
+    Get JavaScript property value from an element.
+    
+    QUIRKS & USAGE NOTES:
+    =====================
+    1. CONTEXT ID ERRORS: This function frequently fails with:
+       "Cannot find context with specified id"
+       This indicates issues with element reference management or timing.
+       
+    2. STALE ELEMENT REFERENCES: Element references can become stale after:
+       - Page navigation or refresh
+       - DOM modifications
+       - Time delays between find and property access
+       
+    3. RECOMMENDED ALTERNATIVE: Use execute_script_on_element instead:
+       ✗ Unreliable: get_element_property(element_id, "value")
+       ✓ Reliable:   execute_script_on_element(tab_id, element_id, "return arguments[0].value;")
+       
+    4. WORKING PROPERTY PATTERNS:
+       - element.value (form inputs)
+       - element.textContent (text content)  
+       - element.innerHTML (HTML content)
+       - element.disabled (boolean state)
+       - element.checked (checkbox state)
+       
+    5. WHY EXECUTE_SCRIPT_ON_ELEMENT WORKS BETTER:
+       - Handles element context more reliably
+       - Provides better error messages
+       - More consistent across different PyDoll versions
+       - Supports complex property access (element.style.display, etc.)
+       
+    EXAMPLE USAGE:
+    ==============
+    # Instead of get_element_property, use:
+    result = execute_script_on_element(
+        tab_id="my_tab",
+        element_id="my_element", 
+        script="return arguments[0].value;"
+    )
+    
+    # For complex properties:
+    result = execute_script_on_element(
+        tab_id="my_tab", 
+        element_id="my_element",
+        script="return {value: arguments[0].value, disabled: arguments[0].disabled};"
+    )
     
     Note: If you get a 'stale element reference' error, re-find the element
     using find_element before calling this function.
@@ -2421,7 +2549,39 @@ async def wait_for_element(
     timeout: float = 10,
     visible: bool = True
 ):
-    """Wait for element to appear using selector."""
+    """
+    Wait for element to appear using selector.
+    
+    QUIRKS & USAGE NOTES:
+    =====================
+    1. DESIGNED FOR DYNAMIC ELEMENTS: This tool is designed to wait for elements that 
+       don't exist yet. If the element already exists on the page, it may timeout 
+       unexpectedly due to internal timing issues.
+       
+    2. PROPER USAGE PATTERNS:
+       ✓ Use for elements created by JavaScript after page load
+       ✓ Use for elements that appear after user interactions
+       ✓ Use for lazy-loaded content
+       ✗ Don't use for elements already present in initial page HTML
+       
+    3. ALTERNATIVE FOR EXISTING ELEMENTS:
+       For elements that already exist, use find_element() directly instead.
+       
+    4. TIMEOUT BEHAVIOR:
+       May timeout even with generous timeout values if element detection 
+       logic conflicts with existing elements.
+       
+    EXAMPLE USAGE:
+    ==============
+    # Create element dynamically, then wait for it:
+    execute_script(tab_id, "setTimeout(() => {
+        const div = document.createElement('div');
+        div.id = 'delayed-element';
+        document.body.appendChild(div);
+    }, 2000);")
+    
+    wait_for_element(tab_id, 'css', '#delayed-element', timeout=5)
+    """
     try:
         tab = get_tab_session(tab_id)
         if not tab:
@@ -2497,7 +2657,50 @@ async def wait_for_element(
         return create_error_response(f"Wait for element failed: {str(e)}")
 
 async def execute_script(tab_id: str, script: str, args: Optional[List] = None):
-    """Execute JavaScript in page context.
+    """
+    Execute JavaScript in page context.
+    
+    QUIRKS & USAGE NOTES:
+    =====================
+    1. UNSUPPORTED PARAMETERS: The documented parameters 'handle_dialogs' and 'timeout' 
+       are NOT supported in this implementation. Using them will cause:
+       "execute_script() got an unexpected keyword argument 'handle_dialogs'"
+       
+    2. SUPPORTED PARAMETERS ONLY:
+       ✓ tab_id: str - Required
+       ✓ script: str - Required  
+       ✓ args: Optional[List] - Optional arguments
+       ✗ handle_dialogs - NOT SUPPORTED
+       ✗ timeout - NOT SUPPORTED
+       
+    3. BLOCKING DIALOG WARNINGS:
+       - alert(), confirm(), prompt() cause 60-second timeouts
+       - Browser becomes unresponsive until timeout
+       - Use console.log() for debugging instead
+       
+    4. SCRIPT SYNTAX REQUIREMENTS:
+       - Use semicolons for statement termination in complex scripts
+       - Return values explicitly with 'return' statement
+       - Avoid 'return' in top-level setTimeout/setInterval callbacks
+       
+    5. ASYNC SCRIPT BEHAVIOR:
+       - Scripts with setTimeout return immediately 
+       - Use wait_for_function for async script completion
+       - Promise-based scripts return Promise objects
+       
+    EXAMPLE USAGE:
+    ==============
+    # Basic execution (supported)
+    execute_script("tab_id", "return document.title;")
+    
+    # With arguments (supported)  
+    execute_script("tab_id", "return arguments[0] + arguments[1];", [5, 10])
+    
+    # Console logging instead of alert
+    execute_script("tab_id", "console.log('Debug message');")
+    
+    # WRONG - unsupported parameters
+    execute_script("tab_id", "return 'test';", handle_dialogs=True)  # ERROR
     
     WARNING: Avoid blocking dialogs (alert, confirm, prompt) as they will cause
     60-second timeouts and leave the browser in an unresponsive state.
@@ -2836,7 +3039,51 @@ async def delete_cookies(
         return create_error_response(f"Delete cookies failed: {str(e)}")
 
 async def upload_file(element_id: str, file_paths: List[str]):
-    """Upload files through file input elements."""
+    """
+    Upload files through file input elements.
+    
+    QUIRKS & USAGE NOTES:
+    =====================
+    1. REQUIRES FILE INPUT ELEMENTS: This tool ONLY works with actual HTML file input elements.
+       It will fail with error "The element is not a file input" if used on other element types.
+       
+    2. ELEMENT MUST BE <input type="file">:
+       ✓ Works: <input type="file" id="file-upload">
+       ✗ Fails: <input type="text" id="text-input">  
+       ✗ Fails: <div id="upload-area">
+       ✗ Fails: <button>Upload</button>
+       
+    3. CREATING FILE INPUTS DYNAMICALLY:
+       If page doesn't have file inputs, create them with JavaScript:
+       
+       execute_script(tab_id, '''
+           const fileInput = document.createElement('input');
+           fileInput.type = 'file';
+           fileInput.id = 'dynamic-file-input';
+           fileInput.name = 'upload';
+           document.body.appendChild(fileInput);
+       ''')
+       
+    4. MULTIPLE FILE SUPPORT:
+       Add multiple="true" attribute for multiple file uploads:
+       fileInput.multiple = true;
+       
+    5. FILE PATH REQUIREMENTS:
+       - All file paths must exist on the local filesystem
+       - Use absolute paths for reliability
+       - Files are validated before upload attempt
+       
+    EXAMPLE USAGE:
+    ==============
+    # 1. First ensure file input exists on page
+    execute_script(tab_id, "document.body.innerHTML += '<input type=\"file\" id=\"upload\">';")
+    
+    # 2. Find the file input element
+    find_element(tab_id, 'upload_elem', 'css', '#upload')
+    
+    # 3. Upload files
+    upload_file('upload_elem', ['/path/to/file.txt', '/path/to/image.jpg'])
+    """
     try:
         element = get_element(element_id)
         if not element:
@@ -3008,7 +3255,61 @@ async def wait_for_function(
         return create_error_response(f"Wait for function failed: {str(e)}")
 
 async def bypass_cloudflare(tab_id: str, url: str, timeout: int = 30):
-    """Bypass Cloudflare protection automatically."""
+    """
+    Bypass Cloudflare protection automatically.
+    
+    QUIRKS & USAGE NOTES:
+    =====================
+    1. EXPECTED TIMEOUT BEHAVIOR: This function will timeout when there's NO Cloudflare
+       protection on the target site. This is NORMAL and EXPECTED behavior, not a bug.
+       
+    2. DESIGNED FOR PROTECTED SITES: These tools are specifically designed for sites
+       that actually have Cloudflare protection active:
+       ✓ Sites with "Checking your browser" pages
+       ✓ Sites with CAPTCHA challenges  
+       ✓ Sites with "Please wait" Cloudflare screens
+       ✗ Regular sites without Cloudflare protection
+       
+    3. TIMEOUT SCENARIOS:
+       - Regular websites (httpbin.org, google.com): WILL TIMEOUT (expected)
+       - Sites with Cloudflare protection: Will attempt bypass
+       - Misconfigured Cloudflare: May timeout after attempting bypass
+       
+    4. TESTING CLOUDFLARE BYPASS:
+       To properly test, you need a site that actually has Cloudflare protection:
+       - Some Discord servers
+       - Sites behind Cloudflare's "Under Attack" mode
+       - Sites with active Bot Fight Mode
+       
+    5. TIMEOUT VALUES:
+       - 10-30 seconds: Normal timeout for non-protected sites
+       - 30-60 seconds: Reasonable for sites with light protection
+       - 60+ seconds: For sites with complex CAPTCHA challenges
+       
+    6. SUCCESS INDICATORS:
+       ✓ Function completes without timeout
+       ✓ Page loads past Cloudflare challenge screen
+       ✓ Access to protected content is granted
+       
+    7. ALTERNATIVES FOR TESTING:
+       If you need to test bypass functionality without real Cloudflare:
+       - Use enable_auto_solve_cloudflare() which doesn't require protection
+       - Test with disable_auto_solve_cloudflare() to verify controls work
+       - Use expect_and_bypass_cloudflare() for context manager approach
+       
+    EXAMPLE USAGE:
+    ==============
+    # This WILL timeout (expected behavior):
+    bypass_cloudflare(tab_id, "https://httpbin.org", timeout=10)
+    # Error: "Cloudflare bypass timed out after 10 seconds"
+    
+    # This MIGHT work if site has protection:
+    bypass_cloudflare(tab_id, "https://discord.com", timeout=60)
+    
+    # For testing controls without real protection:
+    enable_auto_solve_cloudflare(tab_id, time_before_click=3)
+    disable_auto_solve_cloudflare(tab_id)
+    """
     try:
         tab = get_tab_session(tab_id)
         if not tab:
@@ -3107,7 +3408,58 @@ async def expect_and_bypass_cloudflare(
         return create_error_response(f"Expect and bypass Cloudflare failed: {str(e)}")
 
 async def handle_alert(tab_id: str, action: str = "accept", text: Optional[str] = None):
-    """Handle JavaScript alert, confirm, or prompt dialogs."""
+    """
+    Handle JavaScript alert, confirm, or prompt dialogs.
+    
+    QUIRKS & USAGE NOTES:
+    =====================
+    1. DIALOG BLOCKING BEHAVIOR: JavaScript dialogs (alert, confirm, prompt) can 
+       completely block browser automation until handled. Always handle dialogs 
+       promptly to prevent timeouts.
+       
+    2. AUTO-DETECTION: The browser automatically detects when dialogs appear.
+       Use has_dialog() to check for active dialogs before other operations.
+       
+    3. DIALOG TYPES SUPPORTED:
+       ✓ alert() - Simple message dialog (only "accept" action works)
+       ✓ confirm() - Yes/No dialog (accept=true, dismiss=false)
+       ✓ prompt() - Text input dialog (accept + text parameter)
+       
+    4. ACTION PARAMETERS:
+       - "accept": Click OK/Yes button (default)
+       - "dismiss": Click Cancel/No button
+       - text: Text to enter in prompt dialogs (optional)
+       
+    5. DIALOG STATE CONTAMINATION: Unhandled dialogs can leave browser tabs in
+       unusable state. Many automation functions will fail while dialogs are active.
+       
+    6. TESTING DIALOG HANDLING:
+       Create dialogs for testing:
+       execute_script(tab_id, "setTimeout(() => alert('Test message'), 1000);")
+       # Wait for dialog to appear, then handle it
+       
+    7. TIMING CONSIDERATIONS:
+       - Dialogs appear asynchronously after script execution
+       - Use small delays or has_dialog() polling to detect dialog appearance
+       - Handle dialogs immediately after detection
+       
+    EXAMPLE USAGE:
+    ==============
+    # Create a test dialog
+    execute_script(tab_id, "setTimeout(() => alert('Hello World'), 500);")
+    
+    # Check for dialog (may need to wait/retry)
+    if has_dialog(tab_id):
+        handle_alert(tab_id, action="accept")
+    
+    # Handle confirm dialog
+    execute_script(tab_id, "setTimeout(() => confirm('Are you sure?'), 500);")
+    handle_alert(tab_id, action="dismiss")  # Click Cancel
+    
+    # Handle prompt dialog  
+    execute_script(tab_id, "setTimeout(() => prompt('Enter name:'), 500);")
+    handle_alert(tab_id, action="accept", text="John Doe")
+    """
     try:
         tab = get_tab_session(tab_id)
         if not tab:
@@ -3360,7 +3712,48 @@ async def clear_event_callbacks(tab_id: str):
         return create_error_response(f"Clear event callbacks failed: {str(e)}")
 
 async def get_event_logs(tab_id: str, event_type: Optional[str] = None, limit: int = 100):
-    """Get captured event logs."""
+    """
+    Get captured event logs.
+    
+    QUIRKS & USAGE NOTES:
+    =====================
+    1. EMPTY RESULTS BY DEFAULT: This function often returns empty arrays [] even
+       after enabling event monitoring. Events need to be actively triggered.
+       
+    2. REQUIRES EVENT ENABLEMENT: Must call the appropriate enable_*_events() 
+       functions first:
+       - enable_runtime_events() for console logs
+       - enable_page_events() for page lifecycle events
+       - enable_dom_events() for DOM interaction events
+       
+    3. EVENT GENERATION REQUIREMENTS:
+       Events won't appear unless actively triggered:
+       ✓ Console logs: execute_script(tab_id, "console.log('test message');")
+       ✓ Page events: navigate(), refresh_page()
+       ✓ DOM events: click_element(), type_text()
+       
+    4. EVENT TYPES:
+       - "console": console.log, console.warn, console.error messages
+       - "page": page load, navigation, reload events  
+       - "dom": click, input, focus, blur events
+       - "runtime": JavaScript exceptions, promise rejections
+       
+    5. TIMING CONSIDERATIONS:
+       - Enable events BEFORE triggering the actions you want to log
+       - Some events may take time to propagate to the log system
+       - Logs persist until browser session closes
+       
+    EXAMPLE USAGE:
+    ==============
+    # 1. Enable the event type you want to monitor
+    enable_runtime_events(tab_id)
+    
+    # 2. Trigger some events
+    execute_script(tab_id, "console.log('Hello'); console.warn('Warning');")
+    
+    # 3. Retrieve the logs
+    get_event_logs(tab_id, event_type="console", limit=10)
+    """
     try:
         if tab_id not in EVENT_LOGS:
             EVENT_LOGS[tab_id] = []
@@ -3386,7 +3779,58 @@ async def continue_request(
     headers: Optional[List[Dict]] = None,
     post_data: Optional[str] = None
 ):
-    """Continue an intercepted request with modifications."""
+    """
+    Continue an intercepted request with modifications.
+    
+    QUIRKS & USAGE NOTES:
+    =====================
+    1. MOCK TESTING BEHAVIOR: These network interception tools are designed to work 
+       with ANY request_id, even non-existent ones. They will report success even 
+       with fake request IDs for testing purposes.
+       
+    2. REQUIRES ACTUAL INTERCEPTION SETUP: For real request interception to work:
+       ✓ Must enable_network_events() first
+       ✓ Must enable_fetch_events() for fetch request interception
+       ✓ Must set up request interception patterns with callbacks
+       
+    3. REQUEST_ID SOURCE: Real request IDs come from:
+       - get_network_logs() entries (request_id field)
+       - Event callback notifications  
+       - Network monitoring during page activity
+       
+    4. HEADER FORMAT REQUIREMENTS:
+       Headers must be array of objects with name/value properties:
+       ✓ Correct: [{"name": "Content-Type", "value": "application/json"}]
+       ✗ Wrong:   {"Content-Type": "application/json"}
+       
+    5. MODIFICATION CAPABILITIES:
+       - url: Redirect request to different URL
+       - method: Change HTTP method (GET → POST, etc.)
+       - headers: Add, modify, or remove headers
+       - post_data: Change request body content
+       
+    6. TESTING WITHOUT REAL INTERCEPTION:
+       These tools accept any request_id for testing/validation:
+       continue_request(tab_id, "fake_request_123", url="https://modified.com")
+       # Will report success even with fake ID
+       
+    EXAMPLE USAGE:
+    ==============
+    # For real interception (requires setup):
+    enable_network_events(tab_id)
+    # ... trigger network request ...
+    logs = get_network_logs(tab_id)
+    real_request_id = logs[0]["request_id"]
+    
+    # Modify and continue request:
+    continue_request(
+        tab_id=tab_id,
+        request_id=real_request_id,
+        url="https://modified-endpoint.com",
+        headers=[{"name": "Authorization", "value": "Bearer token123"}],
+        post_data='{"modified": "data"}'
+    )
+    """
     try:
         tab = get_tab_session(tab_id)
         if not tab:
@@ -3520,7 +3964,53 @@ async def get_network_response_body(tab_id: str, request_id: str):
         return create_error_response(f"Get network response body failed: {str(e)}")
 
 async def get_network_logs(tab_id: str, filter_pattern: Optional[str] = None, limit: int = 100):
-    """Get network request logs with optional filtering.
+    """
+    Get network request logs with optional filtering.
+    
+    QUIRKS & USAGE NOTES:
+    =====================
+    1. REQUIRES NETWORK EVENTS FIRST: This function will fail with clear error if
+       network events aren't enabled:
+       "Network events must be enabled first. Please call 'enable_network_events'"
+       
+    2. PREREQUISITE SETUP:
+       ✓ MUST call enable_network_events(tab_id) first
+       ✓ THEN trigger network activity to generate logs
+       ✓ THEN call get_network_logs() to retrieve them
+       
+    3. NETWORK ACTIVITY GENERATION:
+       Network logs won't appear unless requests are made:
+       ✓ navigate() to new pages
+       ✓ execute_script() with fetch() calls
+       ✓ make_request() for HTTP requests
+       ✓ Image loading, CSS loading, etc.
+       
+    4. LOG ENTRY FORMAT:
+       Each log contains:
+       - url: Request URL
+       - method: HTTP method (GET, POST, etc.)
+       - status: Response status code (or null if pending)
+       - timestamp: When request occurred
+       - request_id: Unique identifier for request interception
+       
+    5. FILTERING PATTERNS:
+       - Use glob-style patterns: "*.json", "*/api/*", "*example.com*"
+       - Empty/null pattern returns all requests
+       - Case-sensitive matching
+       
+    EXAMPLE USAGE:
+    ==============
+    # 1. Enable network monitoring
+    enable_network_events(tab_id)
+    
+    # 2. Generate network activity
+    execute_script(tab_id, "fetch('https://httpbin.org/json').then(r => r.json());")
+    
+    # 3. Wait a moment for request to complete
+    await asyncio.sleep(2)
+    
+    # 4. Retrieve network logs
+    get_network_logs(tab_id, filter_pattern="*.json", limit=5)
     
     Prerequisites: Call enable_network_events() first to start capturing logs.
     """
@@ -3582,7 +4072,67 @@ async def get_network_logs(tab_id: str, filter_pattern: Optional[str] = None, li
 # === IFRAME SUPPORT ===
 
 async def get_frame(element_id: str, frame_tab_id: str, validate_iframe: bool = True):
-    """Get frame context from an iframe element with enhanced validation.
+    """
+    Get frame context from an iframe element with enhanced validation.
+    
+    QUIRKS & USAGE NOTES:
+    =====================
+    1. CROSS-ORIGIN RESTRICTIONS: This function frequently fails with cross-origin 
+       iframes due to browser security policies:
+       - "Iframe target not found in browser" 
+       - "The iframe may not be fully loaded or may have cross-origin restrictions"
+       
+    2. IFRAME REQUIREMENTS: Only works with proper iframe elements:
+       ✓ Must be actual <iframe> tag
+       ✓ Must have 'src' attribute (not 'srcdoc')
+       ✓ Must be same-origin or have proper CORS headers
+       ✓ Must be fully loaded before frame context access
+       
+    3. SAME-ORIGIN SOLUTIONS: For testing, use same-origin iframes:
+       execute_script(tab_id, '''
+           const iframe = document.createElement('iframe');
+           iframe.src = 'data:text/html,<html><body><h1>Test</h1></body></html>';
+           iframe.id = 'test-iframe';
+           document.body.appendChild(iframe);
+       ''')
+       
+    4. VALIDATION PARAMETER:
+       - validate_iframe=true: Strict validation (recommended)
+       - validate_iframe=false: Skip some checks (may still fail)
+       
+    5. ASYNC/AWAIT IMPLEMENTATION ISSUES:
+       Some errors indicate internal async handling problems:
+       "object str can't be used in 'await' expression"
+       This suggests implementation bugs in the validation logic.
+       
+    6. COMMON FAILURE SCENARIOS:
+       ✗ Cross-origin iframes (most external sites)
+       ✗ Iframes with authentication requirements  
+       ✗ Iframes loaded via JavaScript after page load
+       ✓ Same-origin iframes with direct src URLs
+       ✓ Data URI iframes (limited functionality)
+       
+    7. WORKING ALTERNATIVES:
+       - Use execute_script() to interact with iframe content indirectly
+       - Switch to iframe's parent window for cross-frame communication
+       - Use postMessage for cross-origin iframe communication
+       
+    EXAMPLE USAGE:
+    ==============
+    # Create same-origin iframe for testing:
+    execute_script(tab_id, '''
+        const iframe = document.createElement('iframe');
+        iframe.src = '/same-origin-page.html';  // Same domain
+        iframe.id = 'accessible-iframe';
+        document.body.appendChild(iframe);
+    ''')
+    
+    # Wait for iframe to load
+    wait_for_element(tab_id, 'css', '#accessible-iframe')
+    
+    # Get frame context  
+    find_element(tab_id, 'iframe_elem', 'css', '#accessible-iframe')
+    get_frame('iframe_elem', 'iframe_context', validate_iframe=True)
     
     Args:
         element_id: Element identifier for the iframe
