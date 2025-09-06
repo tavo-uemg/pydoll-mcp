@@ -25,6 +25,30 @@ This server includes ALL PyDoll features:
 - Upload/download operations
 - Wait conditions and synchronization
 
+Best Practices & Common Pitfalls:
+=====================================
+
+1. HTTP Requests:
+   - Headers must be formatted as: [{"name": "key", "value": "val"}]
+   - Not as simple objects: {"key": "val"}
+
+2. Element References:
+   - Re-find elements after page navigation or DOM changes
+   - Stale element errors indicate you need to call find_element again
+
+3. Event System:
+   - Call enable_network_events() before get_network_logs()
+   - Event tools may timeout if browser tab is blocked by dialogs
+
+4. JavaScript Execution:
+   - NEVER use alert(), confirm(), or prompt() - they cause 60s timeouts
+   - Use console.log() for debugging instead
+   - Handle any existing dialogs with handle_alert() before other operations
+
+5. Dialog Management:
+   - Always handle dialogs promptly to prevent browser state contamination
+   - Dialog-blocked tabs cannot perform most operations until cleared
+
 Environment Independent: Automatically detects PyDoll installation
 """
 
@@ -701,7 +725,9 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                         "type": "object",
                         "properties": {
                             "tab_id": {"type": "string", "description": "Tab identifier"},
-                            "script": {"type": "string", "description": "JavaScript code to execute"}
+                            "script": {"type": "string", "description": "JavaScript code to execute"},
+                            "timeout": {"type": "number", "description": "Script execution timeout in seconds (default: 5.0)"},
+                            "handle_dialogs": {"type": "boolean", "description": "Automatically handle blocking dialogs (default: true)"}
                         },
                         "required": ["tab_id", "script"]
                 }
@@ -789,7 +815,7 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                             "tab_id": {"type": "string", "description": "Tab identifier"},
                             "url": {"type": "string", "description": "URL to request"},
                             "method": {"type": "string", "description": "HTTP method", "default": "GET"},
-                            "headers": {"type": "object", "description": "Request headers (optional)"},
+                            "headers": {"type": "array", "items": {"type": "object"}, "description": "Request headers as array of {name, value} objects (optional)"},
                             "data": {"type": "string", "description": "Request body data (optional)"}
                         },
                         "required": ["tab_id", "url"]
@@ -1197,7 +1223,8 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                         "type": "object",
                         "properties": {
                             "element_id": {"type": "string", "description": "IFrame element identifier"},
-                            "frame_tab_id": {"type": "string", "description": "Frame tab identifier"}
+                            "frame_tab_id": {"type": "string", "description": "Frame tab identifier"},
+                            "validate_iframe": {"type": "boolean", "description": "Perform comprehensive iframe validation (default: true)"}
                         },
                         "required": ["element_id", "frame_tab_id"]
                 }
@@ -1455,7 +1482,12 @@ async def navigate(tab_id: str, url: str, wait_until: str = "load") -> Dict[str,
         if not tab:
             return create_error_response(f"Tab '{tab_id}' not found")
         
-        await tab.get(url, wait=wait_until)
+        # Map wait conditions to appropriate timeouts
+        timeout_map = {"load": 60, "domcontentloaded": 30, "networkidle": 90}
+        timeout = timeout_map.get(wait_until, 60)
+        
+        # Use correct PyDoll method with timeout
+        await tab.go_to(url, timeout=timeout)
         
         return create_success_response(f"Successfully navigated to {url}")
         
@@ -1471,7 +1503,7 @@ async def refresh_page(tab_id: str, ignore_cache: bool = False) -> Dict[str, Any
         if not tab:
             return create_error_response(f"Tab '{tab_id}' not found")
         
-        tab.reload(ignore_cache=ignore_cache)
+        await tab.refresh(ignore_cache=ignore_cache)
         
         return create_success_response("Page refreshed successfully")
         
@@ -1896,8 +1928,29 @@ async def press_key(key: str, element_id: Optional[str] = None, modifiers: Optio
                 raise ValueError(f"Element '{element_id}' not found")
             await element.press_keyboard_key(key_obj)
         else:
-            # Page-level key press - need tab context
-            raise ValueError("Page-level key press requires tab context - use element_id")
+            # Page-level key press - use first available tab
+            if not TAB_SESSIONS:
+                raise ValueError("No active tabs for page-level key press")
+            
+            tab = next(iter(TAB_SESSIONS.values()))
+            
+            # Import required types for key event
+            from pydoll.commands import InputCommands
+            from pydoll.protocol.input.types import KeyEventType
+            
+            # Send key down and up events to simulate key press
+            await tab._execute_command(
+                InputCommands.dispatch_key_event(
+                    type=KeyEventType.KEY_DOWN,
+                    key=key_obj if isinstance(key_obj, str) else str(key_obj)
+                )
+            )
+            await tab._execute_command(
+                InputCommands.dispatch_key_event(
+                    type=KeyEventType.KEY_UP,
+                    key=key_obj if isinstance(key_obj, str) else str(key_obj)
+                )
+            )
         
         return create_success_response(f"Key '{key}' pressed successfully")
     except Exception as e:
@@ -2068,7 +2121,7 @@ async def get_element_text(element_id: str):
         # Try different methods to get text
         text = ""
         try:
-            text = await element.text
+            text = await element.text()
             if text is not None:
                 return create_success_response(str(text))
         except:
@@ -2101,7 +2154,11 @@ async def get_element_attribute(element_id: str, attribute_name: str):
         return create_error_response(f"Get element attribute failed: {str(e)}")
 
 async def get_element_property(element_id: str, property_name: str):
-    """Get JavaScript property value from an element."""
+    """Get JavaScript property value from an element.
+    
+    Note: If you get a 'stale element reference' error, re-find the element
+    using find_element before calling this function.
+    """
     try:
         element = get_element(element_id)
         if not element:
@@ -2128,12 +2185,18 @@ async def get_element_property(element_id: str, property_name: str):
             result = await tab.execute_script(script, element)
             return create_success_response(str(result) if result is not None else "")
         except Exception as e:
+            # Check if this is a stale element reference
+            if "Cannot find context with specified id" in str(e) or "stale element" in str(e).lower():
+                return create_error_response(f"Element '{element_id}' reference is stale. Please re-find the element using find_element before accessing properties.")
+            
             # Fallback: try to access as an attribute
             try:
                 script = f"return argument.getAttribute('{property_name}');"
                 result = await tab.execute_script(script, element)
                 return create_success_response(str(result) if result is not None else "")
             except Exception as fallback_error:
+                if "Cannot find context with specified id" in str(fallback_error):
+                    return create_error_response(f"Element '{element_id}' reference is stale. Please re-find the element using find_element before accessing properties.")
                 return create_error_response(f"Failed to get property '{property_name}': {str(e)}, Fallback failed: {str(fallback_error)}")
         
     except Exception as e:
@@ -2434,7 +2497,12 @@ async def wait_for_element(
         return create_error_response(f"Wait for element failed: {str(e)}")
 
 async def execute_script(tab_id: str, script: str, args: Optional[List] = None):
-    """Execute JavaScript in page context."""
+    """Execute JavaScript in page context.
+    
+    WARNING: Avoid blocking dialogs (alert, confirm, prompt) as they will cause
+    60-second timeouts and leave the browser in an unresponsive state.
+    Use console.log() for debugging instead of alert().
+    """
     try:
         tab = get_tab_session(tab_id)
         if not tab:
@@ -2450,7 +2518,11 @@ async def execute_script(tab_id: str, script: str, args: Optional[List] = None):
         return create_error_response(f"Execute script failed: {str(e)}")
 
 async def execute_script_on_element(tab_id: str, element_id: str, script: str, args: Optional[List] = None):
-    """Execute JavaScript with element as context."""
+    """Execute JavaScript with element as context.
+    
+    WARNING: Avoid blocking dialogs (alert, confirm, prompt) as they will cause
+    timeouts. The element is available as 'arguments[0]' in your script.
+    """
     try:
         element = get_element(element_id)
         if not element:
@@ -2614,12 +2686,17 @@ async def make_request(
     tab_id: str,
     url: str,
     method: str = "GET",
-    headers: Optional[Dict] = None,
+    headers: Optional[List[Dict]] = None,
     data: Optional[str] = None,
     json_data: Optional[Dict] = None,
     timeout: int = 30
 ):
-    """Make HTTP request using browser context."""
+    """Make HTTP request using browser context.
+    
+    Args:
+        headers: List of header objects with 'name' and 'value' keys,
+                e.g., [{"name": "Content-Type", "value": "application/json"}]
+    """
     try:
         tab = get_tab_session(tab_id)
         if not tab:
@@ -2631,7 +2708,12 @@ async def make_request(
         # Build request parameters
         kwargs = {"timeout": timeout}
         if headers:
-            kwargs["headers"] = headers
+            # Convert array of {name, value} objects to dict
+            headers_dict = {}
+            for header in headers:
+                if isinstance(header, dict) and 'name' in header and 'value' in header:
+                    headers_dict[header['name']] = header['value']
+            kwargs["headers"] = headers_dict
         if json_data:
             kwargs["json"] = json_data
         elif data:
@@ -3090,7 +3172,11 @@ async def get_dialog_message(tab_id: str):
 # === EVENT SYSTEM IMPLEMENTATIONS ===
 
 async def enable_page_events(tab_id: str):
-    """Enable page event monitoring."""
+    """Enable page event monitoring.
+    
+    Note: This may fail if the browser tab is in a blocked state (e.g., alert dialog open).
+    Handle any active dialogs first using handle_alert().
+    """
     try:
         tab = get_tab_session(tab_id)
         if not tab:
@@ -3100,10 +3186,17 @@ async def enable_page_events(tab_id: str):
         
         return create_success_response("Page events enabled successfully")
     except Exception as e:
+        error_msg = str(e).lower()
+        if "timeout" in error_msg or "blocked" in error_msg:
+            return create_error_response(f"Enable page events failed: Browser tab may be blocked by a dialog. Try handling any active dialogs first with handle_alert(), then retry. Original error: {str(e)}")
         return create_error_response(f"Enable page events failed: {str(e)}")
 
 async def enable_network_events(tab_id: str):
-    """Enable network event monitoring."""
+    """Enable network event monitoring.
+    
+    Note: This may fail if the browser tab is in a blocked state (e.g., alert dialog open).
+    Handle any active dialogs first using handle_alert().
+    """
     try:
         tab = get_tab_session(tab_id)
         if not tab:
@@ -3116,6 +3209,9 @@ async def enable_network_events(tab_id: str):
         
         return create_success_response("Network events enabled successfully")
     except Exception as e:
+        error_msg = str(e).lower()
+        if "timeout" in error_msg or "blocked" in error_msg:
+            return create_error_response(f"Enable network events failed: Browser tab may be blocked by a dialog. Try handling any active dialogs first with handle_alert(), then retry. Original error: {str(e)}")
         return create_error_response(f"Enable network events failed: {str(e)}")
 
 async def enable_fetch_events(tab_id: str, patterns: Optional[List[str]] = None):
@@ -3424,12 +3520,19 @@ async def get_network_response_body(tab_id: str, request_id: str):
         return create_error_response(f"Get network response body failed: {str(e)}")
 
 async def get_network_logs(tab_id: str, filter_pattern: Optional[str] = None, limit: int = 100):
-    """Get network request logs with optional filtering."""
+    """Get network request logs with optional filtering.
+    
+    Prerequisites: Call enable_network_events() first to start capturing logs.
+    """
     try:
         tab = get_tab_session(tab_id)
         if not tab:
             raise ValueError(f"Tab '{tab_id}' not found")
         
+        # Check if network events are enabled
+        if not hasattr(tab, '_network_events_enabled') or not tab._network_events_enabled:
+            return create_error_response("Network events must be enabled first. Please call 'enable_network_events' on this tab before attempting to get network logs.")
+            
         logs = await tab.get_network_logs(filter=filter_pattern)
         
         # Ensure limit is an integer
@@ -3478,8 +3581,14 @@ async def get_network_logs(tab_id: str, filter_pattern: Optional[str] = None, li
 
 # === IFRAME SUPPORT ===
 
-async def get_frame(element_id: str, frame_tab_id: str):
-    """Get frame context from an iframe element."""
+async def get_frame(element_id: str, frame_tab_id: str, validate_iframe: bool = True):
+    """Get frame context from an iframe element with enhanced validation.
+    
+    Args:
+        element_id: Element identifier for the iframe
+        frame_tab_id: New tab ID for the iframe context
+        validate_iframe: Perform comprehensive iframe validation (default: True)
+    """
     try:
         element = get_element(element_id)
         if not element:
@@ -3495,8 +3604,46 @@ async def get_frame(element_id: str, frame_tab_id: str):
         if not parent_tab:
             raise ValueError("Could not find parent tab for the element")
         
+        # Enhanced validation if requested
+        if validate_iframe:
+            try:
+                # Check if element is actually an iframe
+                tag_name = await element.tag_name
+                if tag_name.lower() != 'iframe':
+                    return create_error_response(f"Element is a '{tag_name}', not an iframe. Only iframe elements can be used with get_frame().")
+                
+                # Check for src attribute
+                src = await element.get_attribute('src')
+                if not src:
+                    # Check for srcdoc (inline content)
+                    srcdoc = await element.get_attribute('srcdoc')
+                    if not srcdoc:
+                        return create_error_response("Iframe lacks both 'src' and 'srcdoc' attributes. Cannot access iframe content without a source.")
+                    else:
+                        return create_error_response("Iframe uses 'srcdoc' attribute (inline content). Frame targeting is only supported for iframes with 'src' attributes pointing to separate documents.")
+                
+                # Check if iframe is loaded
+                try:
+                    await element.execute_script("return this.contentDocument != null;")
+                except:
+                    return create_error_response("Cannot access iframe content. This may be due to cross-origin restrictions or the iframe not being fully loaded.")
+                
+            except Exception as validation_error:
+                return create_error_response(f"Iframe validation failed: {str(validation_error)}")
+        
         # Use the pydoll get_frame method
-        frame_tab = await parent_tab.get_frame(element)
+        try:
+            frame_tab = await parent_tab.get_frame(element)
+        except Exception as e:
+            error_msg = str(e)
+            if "not an iframe" in error_msg.lower():
+                return create_error_response(f"Element is not an iframe. Only iframe elements can be used with get_frame().")
+            elif "valid src attribute" in error_msg.lower():
+                return create_error_response(f"Iframe lacks a valid 'src' attribute. Ensure the iframe has a 'src' pointing to a loadable document.")
+            elif "target for the iframe was not found" in error_msg.lower():
+                return create_error_response(f"Iframe target not found in browser. The iframe may not be fully loaded or may have cross-origin restrictions.")
+            else:
+                return create_error_response(f"Failed to create frame context: {error_msg}")
         
         # Store the frame tab in our sessions
         TAB_SESSIONS[frame_tab_id] = frame_tab
