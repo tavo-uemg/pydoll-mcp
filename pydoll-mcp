@@ -357,88 +357,6 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "required": ["tab_id"]
             }
         },
-
-        {
-                "name": "create_browser_session",
-                "description": "Create a new Chrome browser instance with comprehensive configuration options",
-                "inputSchema": {
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                }
-        },
-        {
-                "name": "close_browser_session",
-                "description": "Close a browser session and cleanup resources",
-                "inputSchema": {
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                }
-        },
-        {
-                "name": "create_tab",
-                "description": "Create a new tab in browser session",
-                "inputSchema": {
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                }
-        },
-        {
-                "name": "bring_tab_to_front",
-                "description": "Bring a tab to the front/focus",
-                "inputSchema": {
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                }
-        },
-        {
-                "name": "navigate",
-                "description": "Navigate tab to specified URL with page load waiting",
-                "inputSchema": {
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                }
-        },
-        {
-                "name": "go_back",
-                "description": "Navigate back in browser history",
-                "inputSchema": {
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                }
-        },
-        {
-                "name": "go_forward",
-                "description": "Navigate forward in browser history",
-                "inputSchema": {
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                }
-        },
-        {
-                "name": "refresh_page",
-                "description": "Refresh/reload the current page",
-                "inputSchema": {
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                }
-        },
-        {
-                "name": "find_element",
-                "description": "Find a single element using various selector strategies",
-                "inputSchema": {
-                        "type": "object",
-                        "properties": {},
-                        "required": []
-                }
-        },
         {
                 "name": "find_elements",
                 "description": "Find multiple elements using selector strategy",
@@ -459,8 +377,13 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Click an element using mouse simulation",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                                "element_id": {"type": "string", "description": "Element identifier"},
+                                "x_offset": {"type": "integer", "description": "Horizontal offset from element center", "default": 0},
+                                "y_offset": {"type": "integer", "description": "Vertical offset from element center", "default": 0},
+                                "hold_time": {"type": "number", "description": "Duration to hold mouse button in seconds", "default": 0.1}
+                        },
+                        "required": ["element_id"]
                 }
         },
         {
@@ -468,8 +391,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Click element using JavaScript instead of mouse simulation",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                                "element_id": {"type": "string", "description": "Element identifier"}
+                        },
+                        "required": ["element_id"]
                 }
         },
         {
@@ -477,8 +402,13 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Type text into an element",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                                "element_id": {"type": "string", "description": "Element identifier"},
+                                "text": {"type": "string", "description": "Text to type"},
+                                "clear_first": {"type": "boolean", "description": "Clear field before typing", "default": False},
+                                "delay": {"type": "integer", "description": "Delay between keystrokes in milliseconds", "default": 0}
+                        },
+                        "required": ["element_id", "text"]
                 }
         },
         {
@@ -486,8 +416,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Clear text from an input element",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                                "element_id": {"type": "string", "description": "Element identifier"}
+                        },
+                        "required": ["element_id"]
                 }
         },
         {
@@ -495,8 +427,12 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Press a specific key or key combination",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "key": {"type": "string", "description": "Key to press (e.g., 'ENTER', 'TAB', 'ESCAPE')"},
+                            "element_id": {"type": "string", "description": "Element identifier (optional)"},
+                            "modifiers": {"type": "array", "items": {"type": "string"}, "description": "Key modifiers (e.g., ['CTRL', 'SHIFT'])"}
+                        },
+                        "required": ["key"]
                 }
         },
         {
@@ -504,8 +440,12 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Press and hold a key (without releasing)",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"},
+                            "key": {"type": "string", "description": "Key to press down (e.g., 'ENTER', 'TAB', 'ESCAPE')"},
+                            "modifiers": {"type": "array", "items": {"type": "string"}, "description": "Key modifiers (e.g., ['CTRL', 'SHIFT'])"}
+                        },
+                        "required": ["element_id", "key"]
                 }
         },
         {
@@ -513,8 +453,11 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Release a previously pressed key",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"},
+                            "key": {"type": "string", "description": "Key to release (e.g., 'ENTER', 'TAB', 'ESCAPE')"}
+                        },
+                        "required": ["element_id", "key"]
                 }
         },
         {
@@ -522,8 +465,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Hover mouse over an element",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                                "element_id": {"type": "string", "description": "Element identifier"}
+                        },
+                        "required": ["element_id"]
                 }
         },
         {
@@ -531,8 +476,13 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Scroll element into view or by specific amount",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"},
+                            "x": {"type": "integer", "description": "Horizontal scroll amount (optional)"},
+                            "y": {"type": "integer", "description": "Vertical scroll amount (optional)"},
+                            "behavior": {"type": "string", "description": "Scroll behavior ('auto', 'smooth', 'instant')", "default": "auto"}
+                        },
+                        "required": ["element_id"]
                 }
         },
         {
@@ -540,8 +490,13 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Drag element from source to target location",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "source_element_id": {"type": "string", "description": "Source element identifier"},
+                            "target_element_id": {"type": "string", "description": "Target element identifier"},
+                            "x_offset": {"type": "integer", "description": "Horizontal offset for drop position (optional)"},
+                            "y_offset": {"type": "integer", "description": "Vertical offset for drop position (optional)"}
+                        },
+                        "required": ["source_element_id", "target_element_id"]
                 }
         },
         {
@@ -672,8 +627,11 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Get parent element of specified element",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"},
+                            "parent_element_id": {"type": "string", "description": "Parent element identifier"}
+                        },
+                        "required": ["element_id", "parent_element_id"]
                 }
         },
         {
@@ -681,8 +639,12 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Get child elements of specified element",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"},
+                            "base_child_id": {"type": "string", "description": "Base child element identifier"},
+                            "selector": {"type": "string", "description": "CSS selector for filtering children (optional)"}
+                        },
+                        "required": ["element_id", "base_child_id"]
                 }
         },
         {
@@ -690,8 +652,13 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Get sibling elements of specified element",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"},
+                            "base_sibling_id": {"type": "string", "description": "Base sibling element identifier"},
+                            "next_siblings": {"type": "boolean", "description": "Include next siblings", "default": true},
+                            "previous_siblings": {"type": "boolean", "description": "Include previous siblings", "default": true}
+                        },
+                        "required": ["element_id", "base_sibling_id"]
                 }
         },
         {
@@ -699,8 +666,14 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Wait for an element to meet specific conditions",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "Element identifier"},
+                            "is_visible": {"type": "boolean", "description": "Wait for element to be visible (optional)"},
+                            "is_interactable": {"type": "boolean", "description": "Wait for element to be interactable (optional)"},
+                            "is_on_top": {"type": "boolean", "description": "Wait for element to be on top (optional)"},
+                            "timeout": {"type": "number", "description": "Timeout in seconds", "default": 10}
+                        },
+                        "required": ["element_id"]
                 }
         },
         {
@@ -808,8 +781,14 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Make HTTP request using browser context",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "url": {"type": "string", "description": "URL to request"},
+                            "method": {"type": "string", "description": "HTTP method", "default": "GET"},
+                            "headers": {"type": "object", "description": "Request headers (optional)"},
+                            "data": {"type": "string", "description": "Request body data (optional)"}
+                        },
+                        "required": ["tab_id", "url"]
                 }
         },
         {
@@ -817,8 +796,11 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Set cookies for current domain",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "cookies": {"type": "array", "items": {"type": "object"}, "description": "List of cookie objects"}
+                        },
+                        "required": ["tab_id", "cookies"]
                 }
         },
         {
@@ -826,8 +808,11 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Get cookies from current domain or specific URLs",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "urls": {"type": "array", "items": {"type": "string"}, "description": "URLs to get cookies from (optional)"}
+                        },
+                        "required": ["tab_id"]
                 }
         },
         {
@@ -835,8 +820,14 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Delete specific cookies or all cookies",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "name": {"type": "string", "description": "Cookie name (optional)"},
+                            "url": {"type": "string", "description": "Cookie URL (optional)"},
+                            "domain": {"type": "string", "description": "Cookie domain (optional)"},
+                            "path": {"type": "string", "description": "Cookie path (optional)"}
+                        },
+                        "required": ["tab_id"]
                 }
         },
         {
@@ -869,8 +860,12 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Handle file chooser dialogs with automatic file selection",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "file_paths": {"type": "array", "items": {"type": "string"}, "description": "List of file paths to select"},
+                            "timeout": {"type": "number", "description": "Timeout in seconds", "default": 30}
+                        },
+                        "required": ["tab_id", "file_paths"]
                 }
         },
         {
@@ -878,8 +873,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Enable file chooser dialog interception",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"}
+                        },
+                        "required": ["tab_id"]
                 }
         },
         {
@@ -887,8 +884,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Disable file chooser dialog interception",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"}
+                        },
+                        "required": ["tab_id"]
                 }
         },
         {
@@ -958,8 +957,12 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Use context manager approach for Cloudflare bypass with waiting",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "url": {"type": "string", "description": "URL to navigate to and bypass Cloudflare"},
+                            "custom_selector": {"type": "string", "description": "Custom selector for Cloudflare element (optional)"}
+                        },
+                        "required": ["tab_id", "url"]
                 }
         },
         {
@@ -967,8 +970,12 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Handle JavaScript alert, confirm, or prompt dialogs",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "action": {"type": "string", "description": "Action to take (accept, dismiss)", "default": "accept"},
+                            "text": {"type": "string", "description": "Text to enter in prompt dialogs (optional)"}
+                        },
+                        "required": ["tab_id"]
                 }
         },
         {
@@ -976,8 +983,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Check if there is an active dialog on the page",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"}
+                        },
+                        "required": ["tab_id"]
                 }
         },
         {
@@ -985,8 +994,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Get the message text from an active dialog",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"}
+                        },
+                        "required": ["tab_id"]
                 }
         },
         {
@@ -1049,8 +1060,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Disable all event monitoring for a tab",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"}
+                        },
+                        "required": ["tab_id"]
                 }
         },
         {
@@ -1058,8 +1071,13 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Register callback for specific browser events",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "callback_id": {"type": "string", "description": "Unique callback identifier"},
+                            "event_type": {"type": "string", "description": "Event type to listen for"},
+                            "filter_pattern": {"type": "string", "description": "Optional filter pattern"}
+                        },
+                        "required": ["tab_id", "callback_id", "event_type"]
                 }
         },
         {
@@ -1067,8 +1085,11 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Remove a specific event callback",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "callback_id": {"type": "string", "description": "Callback identifier to remove"}
+                        },
+                        "required": ["tab_id", "callback_id"]
                 }
         },
         {
@@ -1076,8 +1097,10 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Clear all event callbacks for a tab",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"}
+                        },
+                        "required": ["tab_id"]
                 }
         },
         {
@@ -1085,8 +1108,12 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Get captured event logs from a tab",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "event_type": {"type": "string", "description": "Filter by event type (optional)"},
+                            "limit": {"type": "integer", "description": "Maximum number of logs to return", "default": 100}
+                        },
+                        "required": ["tab_id"]
                 }
         },
         {
@@ -1094,8 +1121,15 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Continue an intercepted request with optional modifications",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "request_id": {"type": "string", "description": "Request identifier"},
+                            "url": {"type": "string", "description": "Modified URL (optional)"},
+                            "method": {"type": "string", "description": "Modified HTTP method (optional)"},
+                            "headers": {"type": "array", "items": {"type": "object"}, "description": "Modified headers (optional)"},
+                            "post_data": {"type": "string", "description": "Modified post data (optional)"}
+                        },
+                        "required": ["tab_id", "request_id"]
                 }
         },
         {
@@ -1103,8 +1137,12 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Fail an intercepted request with specified error",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "request_id": {"type": "string", "description": "Request identifier"},
+                            "error_reason": {"type": "string", "description": "Error reason", "default": "Failed"}
+                        },
+                        "required": ["tab_id", "request_id"]
                 }
         },
         {
@@ -1112,8 +1150,15 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Fulfill an intercepted request with custom response",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "request_id": {"type": "string", "description": "Request identifier"},
+                            "response_code": {"type": "integer", "description": "HTTP response code", "default": 200},
+                            "response_headers": {"type": "array", "items": {"type": "object"}, "description": "Response headers (optional)"},
+                            "body": {"type": "string", "description": "Response body (optional)"},
+                            "binary_body": {"type": "string", "description": "Binary response body (optional)"}
+                        },
+                        "required": ["tab_id", "request_id"]
                 }
         },
         {
@@ -1121,8 +1166,11 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Get the response body for a specific network request",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "request_id": {"type": "string", "description": "Request identifier"}
+                        },
+                        "required": ["tab_id", "request_id"]
                 }
         },
         {
@@ -1143,8 +1191,11 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Get frame context from an iframe element for automation",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "element_id": {"type": "string", "description": "IFrame element identifier"},
+                            "frame_tab_id": {"type": "string", "description": "Frame tab identifier"}
+                        },
+                        "required": ["element_id", "frame_tab_id"]
                 }
         },
         {
@@ -1152,8 +1203,14 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Set advanced Chrome browser preferences for existing session",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
-                        "required": []
+                        "properties": {
+                            "session_id": {"type": "string", "description": "Browser session identifier"},
+                            "preferences": {"type": "object", "description": "Browser preferences object (optional)"},
+                            "download_directory": {"type": "string", "description": "Download directory path (optional)"},
+                            "accept_languages": {"type": "string", "description": "Accept languages setting (optional)"},
+                            "prompt_for_download": {"type": "boolean", "description": "Prompt for download setting (optional)"}
+                        },
+                        "required": ["session_id"]
                 }
         },
         {
@@ -1181,7 +1238,9 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 "description": "Clean up cached element references",
                 "inputSchema": {
                         "type": "object",
-                        "properties": {},
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier (optional - if not provided, cleans all elements)"}
+                        },
                         "required": []
                 }
         }
@@ -1776,12 +1835,15 @@ async def type_text(element_id: str, text: str, clear_first: bool = False, delay
             raise ValueError(f"Element '{element_id}' not found")
         
         if clear_first:
-            await element.clear()
+            # Use JavaScript to clear since element.clear() doesn't exist
+            await element.execute_script("this.value = '';")
         
         if delay > 0:
-            await element.type_text(text, delay=delay)
+            # Use correct method with interval parameter
+            await element.type_text(text, interval=delay/1000)
         else:
-            await element.type(text)
+            # Use correct method name
+            await element.type_text(text)
         
         return create_success_response(f"Successfully typed text into element '{element_id}'")
     except Exception as e:
@@ -1794,7 +1856,8 @@ async def clear_text(element_id: str):
         if not element:
             raise ValueError(f"Element '{element_id}' not found")
         
-        await element.clear()
+        # Use JavaScript to clear since element.clear() doesn't exist
+        await element.execute_script("this.value = '';")
         
         return create_success_response(f"Element '{element_id}' cleared successfully")
     except Exception as e:
@@ -1856,7 +1919,21 @@ async def hover_element(element_id: str):
         if not element:
             raise ValueError(f"Element '{element_id}' not found")
         
-        await element.hover()
+        # Implement hover using mouse events since element.hover() doesn't exist
+        bounds = await element.get_bounds_using_js()
+        center_x = bounds['x'] + bounds['width'] / 2
+        center_y = bounds['y'] + bounds['height'] / 2
+        
+        # Import InputCommands and MouseEventType from the connection handler's tab
+        from pydoll.commands import InputCommands
+        from pydoll.protocol.input.types import MouseEventType
+        
+        command = InputCommands.dispatch_mouse_event(
+            type=MouseEventType.MOUSE_MOVED,
+            x=int(center_x),
+            y=int(center_y)
+        )
+        await element._connection_handler.execute_command(command)
         
         return create_success_response(f"Element '{element_id}' hovered successfully")
     except Exception as e:
