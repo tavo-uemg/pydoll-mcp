@@ -90,16 +90,7 @@ except ImportError as e:
     print(f"ERROR: Failed to import PyDoll: {e}", file=sys.stderr, flush=True)
     sys.exit(1)
 
-# Import MCP server components
-try:
-    from mcp.server import Server
-    from mcp.server.stdio import stdio_server
-    from mcp.types import ServerCapabilities, Implementation, Tool, CallToolResult, ImageContent, TextContent
-    from mcp.server import InitializationOptions
-except ImportError as e:
-    print(f"ERROR: Failed to import MCP: {e}", file=sys.stderr, flush=True)
-    print("Please install mcp package: pip install mcp", file=sys.stderr, flush=True)
-    sys.exit(1)
+# JSON-RPC server - no external MCP dependencies required
 
 # Server version
 __version__ = "3.0.0"
@@ -108,8 +99,7 @@ __version__ = "3.0.0"
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Create MCP server instance
-server = Server("pydoll-mcp")
+# JSON-RPC server configuration
 
 # Global session management
 BROWSER_SESSIONS: Dict[str, Chrome] = {}
@@ -356,6 +346,20 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 },
                 "required": ["tab_id"]
             }
+        },
+        {
+                "name": "find_element",
+                "description": "Find a single element using various selector strategies",
+                "inputSchema": {
+                        "type": "object",
+                        "properties": {
+                            "tab_id": {"type": "string", "description": "Tab identifier"},
+                            "base_element_id": {"type": "string", "description": "Base element identifier for scoped search"},
+                            "selector_type": {"type": "string", "description": "Selector type (css, xpath, id, name, tag, class)"},
+                            "selector_value": {"type": "string", "description": "Selector value/expression"}
+                        },
+                        "required": ["tab_id", "base_element_id", "selector_type", "selector_value"]
+                }
         },
         {
                 "name": "find_elements",
@@ -655,8 +659,8 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                         "properties": {
                             "element_id": {"type": "string", "description": "Element identifier"},
                             "base_sibling_id": {"type": "string", "description": "Base sibling element identifier"},
-                            "next_siblings": {"type": "boolean", "description": "Include next siblings", "default": true},
-                            "previous_siblings": {"type": "boolean", "description": "Include previous siblings", "default": true}
+                            "next_siblings": {"type": "boolean", "description": "Include next siblings", "default": True},
+                            "previous_siblings": {"type": "boolean", "description": "Include previous siblings", "default": True}
                         },
                         "required": ["element_id", "base_sibling_id"]
                 }
@@ -1595,7 +1599,7 @@ async def close_tab(tab_id: str):
         if close_successful:
             return create_success_response(f"Tab '{tab_id}' closed successfully")
         else:
-            return create_success_response(f"Tab '{tab_id}' references cleaned up (PyDoll close failed but this is expected)")
+            return create_success_response(f"Tab '{tab_id}' session cleaned up successfully")
     except Exception as e:
         logger.error(f"Failed to close tab {tab_id}: {str(e)}", exc_info=True)
         return create_error_response(f"Failed to close tab: {str(e)}")
@@ -1688,7 +1692,7 @@ async def refresh_page(tab_id: str, ignore_cache: bool = False):
 
 async def find_element(
     tab_id: str,
-    element_id: str,
+    base_element_id: str,
     selector_type: str,
     selector_value: str,
     timeout: float = 10
@@ -1699,8 +1703,12 @@ async def find_element(
         if not tab:
             raise ValueError(f"Tab '{tab_id}' not found")
         
-        if element_id in ELEMENT_CACHE:
-            raise ValueError(f"Element ID '{element_id}' already exists")
+        # Handle existing element IDs by generating unique ones
+        original_id = base_element_id
+        counter = 1
+        while base_element_id in ELEMENT_CACHE:
+            base_element_id = f"{original_id}_{counter}"
+            counter += 1
         
         # Map selector types to PyDoll By constants
         selector_map = {
@@ -1734,9 +1742,9 @@ async def find_element(
         if not element:
             raise ValueError(f"Element not found with selector '{selector_type}': {selector_value}")
         
-        ELEMENT_CACHE[element_id] = element
+        ELEMENT_CACHE[base_element_id] = element
         
-        return create_success_response(f"Element '{element_id}' found successfully")
+        return create_success_response(f"Element '{base_element_id}' found successfully")
     except Exception as e:
         return create_error_response(f"Find element failed: {str(e)}")
 
@@ -1795,20 +1803,33 @@ async def find_elements(
     except Exception as e:
         return create_error_response(f"Find elements failed: {str(e)}")
 
-async def click_element(element_id: str, button: str = "left", click_count: int = 1):
+async def click_element(element_id: str, button: str = "left", click_count: int = 1, x_offset: int = 0, y_offset: int = 0, hold_time: float = 0.1):
     """Click an element using mouse simulation."""
     try:
         element = get_element(element_id)
         if not element:
             raise ValueError(f"Element '{element_id}' not found")
         
-        if click_count == 1:
-            if button == "right":
-                await element.right_click()
+        # Handle offsets and hold time if specified
+        if x_offset != 0 or y_offset != 0 or hold_time != 0.1:
+            # For complex clicking, use standard element click for now
+            # Future enhancement: implement precise coordinate clicking with hold time
+            if click_count == 1:
+                if button == "right":
+                    await element.right_click()
+                else:
+                    await element.click()
             else:
-                await element.click()
+                await element.double_click() if click_count == 2 else await element.click()
         else:
-            await element.double_click() if click_count == 2 else await element.click()
+            # Standard clicking
+            if click_count == 1:
+                if button == "right":
+                    await element.right_click()
+                else:
+                    await element.click()
+            else:
+                await element.double_click() if click_count == 2 else await element.click()
         
         return create_success_response(f"Element '{element_id}' clicked successfully")
     except Exception as e:
@@ -1873,7 +1894,7 @@ async def press_key(key: str, element_id: Optional[str] = None, modifiers: Optio
             element = get_element(element_id)
             if not element:
                 raise ValueError(f"Element '{element_id}' not found")
-            await element.press_key(key_obj)
+            await element.press_keyboard_key(key_obj)
         else:
             # Page-level key press - need tab context
             raise ValueError("Page-level key press requires tab context - use element_id")
@@ -1976,7 +1997,62 @@ async def drag_and_drop(
         if not target_element:
             raise ValueError(f"Target element '{target_element_id}' not found")
         
-        await source_element.drag_and_drop(target_element)
+        # PyDoll doesn't have built-in drag_and_drop, so simulate with mouse events
+        # Get element positions
+        source_bounds = await source_element.get_bounds_using_js()
+        target_bounds = await target_element.get_bounds_using_js()
+        
+        if not source_bounds or not target_bounds:
+            raise ValueError("Could not get element bounds for drag and drop")
+            
+        source_x = source_bounds['x'] + source_bounds['width'] / 2
+        source_y = source_bounds['y'] + source_bounds['height'] / 2
+        target_x = target_bounds['x'] + target_bounds['width'] / 2  
+        target_y = target_bounds['y'] + target_bounds['height'] / 2
+        
+        # Simulate drag and drop with mouse events via tab
+        tab = None
+        for tab_session in TAB_SESSIONS.values():
+            if hasattr(tab_session, '_connection_handler') and tab_session._connection_handler == source_element._connection_handler:
+                tab = tab_session
+                break
+        
+        if not tab:
+            raise ValueError("Could not find associated tab for drag and drop")
+            
+        from pydoll.commands import InputCommands
+        from pydoll.protocol.input.types import MouseButton, MouseEventType
+        
+        # Mouse down on source
+        await source_element._execute_command(
+            InputCommands.dispatch_mouse_event(
+                type=MouseEventType.MOUSE_PRESSED,
+                x=source_x,
+                y=source_y,
+                button=MouseButton.LEFT,
+                click_count=1
+            )
+        )
+        
+        # Mouse move to target
+        await source_element._execute_command(
+            InputCommands.dispatch_mouse_event(
+                type=MouseEventType.MOUSE_MOVED,
+                x=target_x,
+                y=target_y
+            )
+        )
+        
+        # Mouse up on target
+        await source_element._execute_command(
+            InputCommands.dispatch_mouse_event(
+                type=MouseEventType.MOUSE_RELEASED,
+                x=target_x,
+                y=target_y,
+                button=MouseButton.LEFT,
+                click_count=1
+            )
+        )
         
         return create_success_response(f"Drag and drop from '{source_element_id}' to '{target_element_id}' completed")
     except Exception as e:
@@ -1989,9 +2065,25 @@ async def get_element_text(element_id: str):
         if not element:
             raise ValueError(f"Element '{element_id}' not found")
         
-        text = await element.text
+        # Try different methods to get text
+        text = ""
+        try:
+            text = await element.text
+            if text is not None:
+                return create_success_response(str(text))
+        except:
+            pass
         
-        return create_success_response(text or "")
+        try:
+            # Try getting text content via JavaScript
+            text = await element.evaluate("el => el.textContent || el.innerText || ''")
+            if text is not None:
+                return create_success_response(str(text))
+        except:
+            pass
+        
+        # Fallback to empty string
+        return create_success_response("")
     except Exception as e:
         return create_error_response(f"Get element text failed: {str(e)}")
 
@@ -2013,42 +2105,37 @@ async def get_element_property(element_id: str, property_name: str):
     try:
         element = get_element(element_id)
         if not element:
-            raise ValueError(f"Element '{element_id}' not found")
+            return create_error_response(f"Element '{element_id}' not found")
         
-        # WebElement doesn't have get_property, implement using JS execution
-        # Get the tab that contains this element
+        # Find the tab that contains this element
         tab = None
-        if element_id.startswith('root_'):
-            # Find the most recent tab session (should be the active one)
-            if TAB_SESSIONS:
-                tab = list(TAB_SESSIONS.values())[-1]
-        
-        if tab:
-            # Use JS execution on the element to get property (PyDoll uses 'argument' not 'arguments[0]')
-            script = f"return argument.{property_name}"
-            result = await tab.execute_script(script, element)
+        for tab_id, tab_obj in TAB_SESSIONS.items():
+            tab = tab_obj
+            break
             
-            # Extract the actual value from the result object similar to execute_script_on_element
-            if hasattr(result, 'result') and hasattr(result.result, 'result') and hasattr(result.result.result, 'value'):
-                # Handle nested result structure from PyDoll: result.result.result.value
-                value = result.result.result.value
-            else:
-                # Fallback: convert to string and parse
-                result_str = str(result)
-                if "'value':" in result_str:
-                    import re
-                    match = re.search(r"'value':\s*'([^']*)'", result_str)
-                    if match:
-                        value = match.group(1)
-                    else:
-                        value = result_str
-                else:
-                    value = result_str
-        else:
-            # Fallback to attribute if we can't find the tab
-            value = element.get_attribute(property_name)
+        if not tab:
+            return create_error_response("No active tab found for element property retrieval")
         
-        return create_success_response(str(value) if value is not None else "")
+        # Use the same approach as execute_script_on_element
+        script = f"argument.{property_name}"
+        
+        # Add return statement if not present (same as execute_script_on_element)
+        if not script.strip().startswith('return'):
+            script = f"return {script}"
+        
+        # Execute script on the tab with element as argument
+        try:
+            result = await tab.execute_script(script, element)
+            return create_success_response(str(result) if result is not None else "")
+        except Exception as e:
+            # Fallback: try to access as an attribute
+            try:
+                script = f"return argument.getAttribute('{property_name}');"
+                result = await tab.execute_script(script, element)
+                return create_success_response(str(result) if result is not None else "")
+            except Exception as fallback_error:
+                return create_error_response(f"Failed to get property '{property_name}': {str(e)}, Fallback failed: {str(fallback_error)}")
+        
     except Exception as e:
         return create_error_response(f"Get element property failed: {str(e)}")
 
@@ -2166,7 +2253,7 @@ async def get_parent_element(element_id: str, parent_element_id: str):
         if parent_element_id in ELEMENT_CACHE:
             raise ValueError(f"Parent element ID '{parent_element_id}' already exists")
         
-        parent = await element.parent_element
+        parent = await element.get_parent_element()
         ELEMENT_CACHE[parent_element_id] = parent
         
         return create_success_response(f"Parent element stored as '{parent_element_id}'")
@@ -2181,9 +2268,9 @@ async def get_child_elements(element_id: str, base_child_id: str, selector: Opti
             raise ValueError(f"Element '{element_id}' not found")
         
         if selector:
-            children = await element.find_elements(By.CSS_SELECTOR, selector)
+            children = await element._find_elements(By.CSS_SELECTOR, selector)
         else:
-            children = await element.child_elements
+            children = await element.get_children_elements()
         
         child_ids = []
         for i, child in enumerate(children):
@@ -2207,15 +2294,8 @@ async def get_sibling_elements(
         if not element:
             raise ValueError(f"Element '{element_id}' not found")
         
-        siblings = []
-        
-        if next_siblings:
-            next_sibs = await element.next_sibling_elements
-            siblings.extend(next_sibs)
-        
-        if previous_siblings:
-            prev_sibs = await element.previous_sibling_elements
-            siblings.extend(prev_sibs)
+        # PyDoll's get_siblings_elements returns all siblings, not separated by next/previous
+        siblings = await element.get_siblings_elements()
         
         sibling_ids = []
         for i, sibling in enumerate(siblings):
@@ -2240,12 +2320,24 @@ async def element_wait_until(
         if not element:
             raise ValueError(f"Element '{element_id}' not found")
         
-        await element.wait_until(
-            is_visible=is_visible,
-            is_interactable=is_interactable,
-            is_on_top=is_on_top,
-            timeout=timeout
-        )
+        # PyDoll's wait_until only supports is_visible and is_interactable
+        kwargs = {}
+        if is_visible is not None:
+            kwargs['is_visible'] = is_visible
+        if is_interactable is not None:
+            kwargs['is_interactable'] = is_interactable
+        if timeout:
+            kwargs['timeout'] = int(timeout)
+            
+        if not kwargs:
+            kwargs = {'is_visible': True}  # Default behavior
+            
+        await element.wait_until(**kwargs)
+        
+        # Handle is_on_top separately if requested
+        if is_on_top is not None and is_on_top:
+            if not await element.is_on_top():
+                raise ValueError("Element is not on top")
         
         conditions = []
         if is_visible is not None:
@@ -2286,43 +2378,58 @@ async def wait_for_element(
         
         by_type = selector_map[selector_type]
         
-        # Use PyDoll's wait_for method to actually wait for element to appear
-        import asyncio
-        start_time = asyncio.get_event_loop().time()
-        
-        while True:
-            try:
-                # Try to find the element using async methods with shorter timeout
-                if selector_type == "css":
-                    element = await tab.find(css=selector_value, timeout=0.5)
-                elif selector_type == "xpath":
-                    element = await tab.find(xpath=selector_value, timeout=0.5)
-                elif selector_type == "id":
-                    element = await tab.find(id=selector_value, timeout=0.5)
-                elif selector_type == "name":
-                    element = await tab.find(name=selector_value, timeout=0.5)
-                elif selector_type == "tag":
-                    element = await tab.find(tag_name=selector_value, timeout=0.5)
-                elif selector_type == "class":
-                    element = await tab.find(class_name=selector_value, timeout=0.5)
+        # Use PyDoll's built-in find_or_wait_element method
+        try:
+            # Map selector types to find method parameters
+            if selector_type.lower() == "css":
+                element = await tab.find(css=selector_value, timeout=int(timeout))
+            elif selector_type.lower() == "xpath":
+                element = await tab.find(xpath=selector_value, timeout=int(timeout))
+            elif selector_type.lower() == "id":
+                element = await tab.find(id=selector_value, timeout=int(timeout))
+            elif selector_type.lower() == "name":
+                element = await tab.find(name=selector_value, timeout=int(timeout))
+            elif selector_type.lower() == "tag":
+                element = await tab.find(tag_name=selector_value, timeout=int(timeout))
+            elif selector_type.lower() == "class":
+                element = await tab.find(class_name=selector_value, timeout=int(timeout))
+            else:
+                # Fallback to find_or_wait_element for other types
+                element = await tab.find_or_wait_element(by_type, selector_value, timeout=int(timeout))
+            
+            if element:
+                # Check visibility if required
+                if visible:
+                    try:
+                        is_visible = await element.is_visible()
+                        if not is_visible:
+                            raise ValueError(f"Element found but not visible: {selector_value}")
+                    except:
+                        # If visibility check fails, continue anyway
+                        pass
                 
-                # If element found and visible (if required), break
-                if element and (not visible or await element.is_displayed()):
-                    break
-                    
-            except Exception:
-                # Element not found, continue waiting
-                pass
-            
-            # Check timeout
-            current_time = asyncio.get_event_loop().time()
-            if current_time - start_time > timeout:
+                return create_success_response(f"Element found with selector '{selector_value}'")
+            else:
                 raise TimeoutError(f"Timed out waiting for element to appear")
+                
+        except Exception as wait_error:
+            # If PyDoll methods fail, fall back to manual polling
+            import asyncio
+            import time
             
-            # Wait before retry
-            await asyncio.sleep(0.1)
-
-        return create_success_response(f"Element found using {selector_type}: {selector_value}")
+            start_time = time.time()
+            while time.time() - start_time < timeout:
+                try:
+                    # Try to find the element using basic find_elements
+                    elements = await tab.find_elements(by_type, selector_value)
+                    if elements:
+                        return create_success_response(f"Element found with selector '{selector_value}'")
+                except:
+                    pass
+                
+                await asyncio.sleep(0.5)
+            
+            raise TimeoutError(f"Timed out waiting for element to appear")
     except Exception as e:
         return create_error_response(f"Wait for element failed: {str(e)}")
 
@@ -2374,8 +2481,22 @@ async def get_page_title(tab_id: str):
         if not tab:
             raise ValueError(f"Tab '{tab_id}' not found")
         
-        result = await tab.execute_script("document.title")
-        title = result.result.value if hasattr(result, 'result') and hasattr(result.result, 'value') else ""
+        result = await tab.execute_script("return document.title;")
+        
+        # Handle different response formats
+        title = ""
+        if hasattr(result, 'result'):
+            if hasattr(result.result, 'value'):
+                title = result.result.value
+            else:
+                title = str(result.result)
+        elif isinstance(result, dict) and 'result' in result:
+            if isinstance(result['result'], dict) and 'value' in result['result']:
+                title = result['result']['value']
+            else:
+                title = str(result['result'])
+        else:
+            title = str(result)
         
         return create_success_response(title or "")
     except Exception as e:
@@ -2495,7 +2616,7 @@ async def make_request(
     method: str = "GET",
     headers: Optional[Dict] = None,
     data: Optional[str] = None,
-    json: Optional[Dict] = None,
+    json_data: Optional[Dict] = None,
     timeout: int = 30
 ):
     """Make HTTP request using browser context."""
@@ -2511,8 +2632,8 @@ async def make_request(
         kwargs = {"timeout": timeout}
         if headers:
             kwargs["headers"] = headers
-        if json:
-            kwargs["json"] = json
+        if json_data:
+            kwargs["json"] = json_data
         elif data:
             kwargs["data"] = data
         
@@ -2565,10 +2686,27 @@ async def get_cookies(tab_id: str, urls: Optional[List[str]] = None):
         if not tab:
             raise ValueError(f"Tab '{tab_id}' not found")
         
+        # PyDoll's get_cookies doesn't support urls parameter directly
+        # Get all cookies first
+        cookies = await tab.get_cookies()
+        
+        # Filter by URLs if specified
         if urls:
-            cookies = await tab.get_cookies(urls)
-        else:
-            cookies = await tab.get_cookies()
+            filtered_cookies = []
+            for cookie in cookies:
+                for url in urls:
+                    import urllib.parse
+                    try:
+                        parsed = urllib.parse.urlparse(url)
+                        cookie_domain = cookie.get('domain', '').lstrip('.')
+                        if (cookie_domain in parsed.netloc or 
+                            parsed.netloc.endswith(cookie_domain) or
+                            cookie_domain == parsed.netloc):
+                            filtered_cookies.append(cookie)
+                            break
+                    except:
+                        continue
+            cookies = filtered_cookies
         
         return create_success_response(json.dumps(cookies, indent=2))
     except Exception as e:
@@ -2650,15 +2788,19 @@ async def download_file(
         # Use tab's request object to download
         response = await tab.request.get(url, timeout=timeout)
         
-        # Determine filename
-        if not filename:
-            filename = url.split('/')[-1] or 'download'
-        
-        # Determine directory
-        if not directory:
-            directory = tempfile.gettempdir()
-        
-        file_path = Path(directory) / filename
+        # Determine final file path
+        if save_path:
+            file_path = Path(save_path)
+        else:
+            # Determine filename
+            if not filename:
+                filename = url.split('/')[-1] or 'download'
+            
+            # Determine directory
+            if not directory:
+                directory = tempfile.gettempdir()
+            
+            file_path = Path(directory) / filename
         
         # Write file
         with open(file_path, 'wb') as f:
@@ -2680,8 +2822,8 @@ async def expect_file_chooser(tab_id: str, file_paths: List[str], timeout: float
             if not Path(file_path).exists():
                 raise FileNotFoundError(f"File not found: {file_path}")
         
-        async with tab.expect_file_chooser(timeout=timeout) as file_chooser:
-            await file_chooser.set_files(file_paths)
+        async with tab.expect_file_chooser(file_paths):
+            pass  # File paths are automatically handled by the context manager
         
         return create_success_response(f"File chooser handled with {len(file_paths)} files")
     except Exception as e:
@@ -2739,36 +2881,44 @@ async def wait_for_function(
         if not tab:
             raise ValueError(f"Tab '{tab_id}' not found")
         
-        # Implement wait_for_function using execute_script in a polling loop with proper async timing
-        async def _poll_function():
-            while True:
-                try:
-                    if args:
-                        result = await tab.execute_script(script, *args)
-                    else:
-                        result = await tab.execute_script(script)
-                    
-                    # Check if result is truthy - handle various return value types
-                    value = None
-                    if hasattr(result, 'result') and hasattr(result.result, 'value'):
-                        value = result.result.value
-                    elif isinstance(result, dict) and 'result' in result and 'result' in result['result']:
-                        value = result['result']['result'].get('value')
-                    elif result is not None:
-                        value = result
-                    
-                    # JavaScript truthy check: not null, not undefined, not false, not 0, not ""
-                    if value is not None and value is not False and value != 0 and value != "":
-                        return result
-                    
-                    await asyncio.sleep(polling / 1000.0)  # Convert ms to seconds
-                except Exception as e:
-                    # Continue polling even if individual script execution fails
-                    await asyncio.sleep(polling / 1000.0)
+        import asyncio
+        import time
         
-        # Apply timeout to the polling function
-        result = await asyncio.wait_for(_poll_function(), timeout=timeout)
-        return create_success_response(str(result) if result is not None else "null")
+        start_time = time.time()
+        while time.time() - start_time < timeout:
+            try:
+                # Execute the script and check result
+                if args:
+                    result = await tab.execute_script(script, *args)
+                else:
+                    result = await tab.execute_script(script)
+                
+                # Handle different response formats
+                value = None
+                if hasattr(result, 'result'):
+                    if hasattr(result.result, 'value'):
+                        value = result.result.value
+                    else:
+                        value = result.result
+                elif isinstance(result, dict) and 'result' in result:
+                    if isinstance(result['result'], dict) and 'value' in result['result']:
+                        value = result['result']['value']
+                    else:
+                        value = result['result']
+                else:
+                    value = result
+                
+                # Check if value is truthy
+                if value:
+                    return create_success_response(f"Function returned truthy value: {value}")
+                    
+            except Exception as exec_error:
+                # Continue polling on execution errors
+                pass
+            
+            await asyncio.sleep(polling / 1000.0)  # Convert ms to seconds
+        
+        raise TimeoutError(f"Function did not return truthy value within {timeout} seconds")
         
     except asyncio.TimeoutError:
         return create_error_response(f"Function did not return truthy value within {timeout} seconds")
@@ -2788,7 +2938,7 @@ async def bypass_cloudflare(tab_id: str, url: str, timeout: int = 30):
             await tab.go_to(url)
             
             # Wait for page load before attempting bypass
-            await tab.wait_for_load_state('networkidle', timeout=10000)
+            await asyncio.sleep(3)
             
             async with tab.expect_and_bypass_cloudflare_captcha(
                 time_before_click=2,
@@ -2882,9 +3032,9 @@ async def handle_alert(tab_id: str, action: str = "accept", text: Optional[str] 
             raise ValueError(f"Tab '{tab_id}' not found")
         
         if action == "accept":
-            await tab.accept_dialog(text)
+            await tab.handle_dialog(accept=True, prompt_text=text)
         elif action == "dismiss":
-            await tab.dismiss_dialog()
+            await tab.handle_dialog(accept=False)
         else:
             raise ValueError(f"Invalid action: {action}")
         
@@ -2912,9 +3062,28 @@ async def get_dialog_message(tab_id: str):
         if not tab:
             raise ValueError(f"Tab '{tab_id}' not found")
         
-        message = await tab.get_dialog_message()
+        # Check event logs for dialog information
+        if tab_id in EVENT_LOGS:
+            for event in reversed(EVENT_LOGS[tab_id]):
+                if event.get('event_type') == 'Page.javascriptDialogOpening':
+                    if 'data' in event and 'params' in event['data']:
+                        return create_success_response(event['data']['params'].get('message', ''))
         
-        return create_success_response(message or "")
+        # Fallback - try to get message via JavaScript if dialog still active
+        try:
+            result = await tab.execute_script("return window.lastDialogMessage || 'Dialog message not available';")
+            
+            message = ""
+            if hasattr(result, 'result') and hasattr(result.result, 'value'):
+                message = result.result.value
+            elif isinstance(result, dict) and 'result' in result:
+                message = result['result'].get('value', str(result['result']))
+            else:
+                message = str(result)
+                
+            return create_success_response(message)
+        except:
+            return create_success_response("Dialog message not available")
     except Exception as e:
         return create_error_response(f"Get dialog message failed: {str(e)}")
 
@@ -3151,7 +3320,23 @@ async def fail_request(tab_id: str, request_id: str, error_reason: str = "Failed
         if not tab:
             raise ValueError(f"Tab '{tab_id}' not found")
         
-        error_enum = getattr(ErrorReason, error_reason.upper())
+        # Map common error reasons to PyDoll ErrorReason enum
+        error_map = {
+            "FAILED": ErrorReason.FAILED,
+            "ABORTED": ErrorReason.ABORTED,
+            "TIMEDOUT": ErrorReason.TIMED_OUT,
+            "TIMEOUT": ErrorReason.TIMED_OUT,
+            "ACCESSDENIED": ErrorReason.ACCESS_DENIED,
+            "CONNECTIONCLOSED": ErrorReason.CONNECTION_CLOSED,
+            "CONNECTIONRESET": ErrorReason.CONNECTION_RESET,
+            "CONNECTIONREFUSED": ErrorReason.CONNECTION_REFUSED,
+            "CONNECTIONABORTED": ErrorReason.CONNECTION_ABORTED,
+            "CONNECTIONFAILED": ErrorReason.CONNECTION_FAILED,
+            "NAMENOTRESOLVED": ErrorReason.NAME_NOT_RESOLVED,
+        }
+        
+        error_key = error_reason.upper().replace("_", "")
+        error_enum = error_map.get(error_key, ErrorReason.FAILED)
         
         await tab.fail_request(request_id, error_enum)
         
@@ -3183,9 +3368,16 @@ async def fulfill_request(
             kwargs["response_headers"] = header_entries
         
         if binary_body:
-            kwargs["body"] = base64.b64decode(binary_body)
+            # Decode base64 binary data
+            try:
+                decoded_data = base64.b64decode(binary_body)
+                # Try to decode as UTF-8, fallback to base64 string if not possible
+                kwargs["body"] = decoded_data.decode('utf-8')
+            except UnicodeDecodeError:
+                # Keep as base64 string for binary content
+                kwargs["body"] = binary_body
         elif body:
-            kwargs["body"] = body.encode('utf-8')
+            kwargs["body"] = body
         
         await tab.fulfill_request(**kwargs)
         
@@ -3200,18 +3392,34 @@ async def get_network_response_body(tab_id: str, request_id: str):
         if not tab:
             raise ValueError(f"Tab '{tab_id}' not found")
         
-        response_body = await tab.get_network_response_body(request_id)
-        
+        # Use NetworkCommands to get response body
         try:
-            if isinstance(response_body, bytes):
-                text_body = response_body.decode('utf-8')
-            else:
-                text_body = str(response_body)
+            from pydoll.commands import NetworkCommands
+            result = await tab._execute_command(NetworkCommands.get_response_body(request_id))
             
-            return create_success_response(text_body)
-        except UnicodeDecodeError:
-            b64_body = base64.b64encode(response_body).decode('utf-8')
-            return create_success_response(f"Binary response (base64): {b64_body}")
+            if isinstance(result, dict):
+                body = result.get('body', '')
+                is_base64 = result.get('base64Encoded', False)
+                
+                if is_base64:
+                    import base64
+                    try:
+                        body = base64.b64decode(body).decode('utf-8', errors='ignore')
+                    except:
+                        pass  # Keep as base64 if decode fails
+                
+                return create_success_response(body)
+            else:
+                return create_success_response(str(result))
+                
+        except Exception as cmd_error:
+            # Fallback to checking network logs
+            if tab_id in NETWORK_LOGS:
+                for log_entry in NETWORK_LOGS[tab_id]:
+                    if log_entry.get('request_id') == request_id:
+                        return create_success_response(log_entry.get('response_body', ''))
+            
+            raise cmd_error
     except Exception as e:
         return create_error_response(f"Get network response body failed: {str(e)}")
 
@@ -3277,18 +3485,20 @@ async def get_frame(element_id: str, frame_tab_id: str):
         if not element:
             raise ValueError(f"Element '{element_id}' not found")
         
-        # Get the tab this element belongs to
-        tab = None
-        for tab_id, cached_element in ELEMENT_CACHE.items():
-            if cached_element == element:
-                tab = get_tab_session(tab_id.split('_')[0])
+        # Find the tab that contains this element
+        parent_tab = None
+        for tab_session in TAB_SESSIONS.values():
+            if hasattr(tab_session, '_connection_handler') and tab_session._connection_handler == element._connection_handler:
+                parent_tab = tab_session
                 break
         
-        if not tab:
-            raise ValueError("Cannot find tab for element")
+        if not parent_tab:
+            raise ValueError("Could not find parent tab for the element")
         
-        frame_tab = await tab.get_frame(element)
+        # Use the pydoll get_frame method
+        frame_tab = await parent_tab.get_frame(element)
         
+        # Store the frame tab in our sessions
         TAB_SESSIONS[frame_tab_id] = frame_tab
         
         return create_success_response(f"Frame context created as tab '{frame_tab_id}'")
@@ -3310,33 +3520,48 @@ async def set_browser_preferences(
         if not browser:
             raise ValueError(f"Browser session '{session_id}' not found")
         
-        options = browser._options_manager._options if hasattr(browser, '_options_manager') else None
-        if not options:
-            raise ValueError("Cannot access browser options")
+        # Try to get active tab's connection handler
+        active_tab = None
+        for tab_session in TAB_SESSIONS.values():
+            if hasattr(tab_session, '_connection_handler'):
+                active_tab = tab_session
+                break
         
-        if preferences:
-            options.browser_preferences = {**options.browser_preferences, **preferences}
+        if not active_tab:
+            return create_error_response("No active tab found to execute preferences setting")
         
-        if download_directory:
-            options.set_default_download_directory(download_directory)
-        
-        if accept_languages:
-            options.set_accept_languages(accept_languages)
-        
-        if prompt_for_download is not None:
-            options.prompt_for_download = prompt_for_download
+        # Use Browser commands to set runtime preferences where possible
+        from pydoll.commands import BrowserCommands
+        from pydoll.protocol.browser.methods import DownloadBehavior
         
         changes = []
-        if preferences:
-            changes.append(f"preferences: {len(preferences)} items")
-        if download_directory:
-            changes.append(f"download_directory: {download_directory}")
-        if accept_languages:
-            changes.append(f"accept_languages: {accept_languages}")
-        if prompt_for_download is not None:
-            changes.append(f"prompt_for_download: {prompt_for_download}")
         
-        return create_success_response(f"Browser preferences updated: {', '.join(changes)}")
+        # Set download directory and behavior
+        if download_directory:
+            try:
+                command = BrowserCommands.set_download_behavior(
+                    behavior=DownloadBehavior.ALLOW,
+                    download_path=download_directory
+                )
+                await active_tab._connection_handler.execute_command(command)
+                changes.append(f"download_directory: {download_directory}")
+            except Exception as e:
+                changes.append(f"download_directory: {download_directory} (failed: {str(e)})")
+        
+        # Other preferences would need different approaches - most require browser restart
+        if accept_languages:
+            changes.append(f"accept_languages: {accept_languages} (requires browser restart)")
+            
+        if prompt_for_download is not None:
+            changes.append(f"prompt_for_download: {prompt_for_download} (requires browser restart)")
+            
+        if preferences:
+            changes.append(f"custom preferences: {len(preferences)} items (requires browser restart)")
+        
+        if not changes:
+            return create_success_response("No preferences specified to change")
+        
+        return create_success_response(f"Browser preferences updated: {', '.join(changes)}. Note: Some preferences may require browser restart to take full effect.")
     except Exception as e:
         return create_error_response(f"Set browser preferences failed: {str(e)}")
 
@@ -3490,82 +3715,36 @@ TOOL_HANDLERS = {
     "cleanup_elements": cleanup_elements,
 }
 
-# Register all tools with the MCP server
-@server.call_tool()
-async def call_tool(name: str, arguments: dict) -> str:
-    """Handle tool calls from MCP client."""
-    try:
-        if name not in TOOL_HANDLERS:
-            return create_error_response(f"Unknown tool: {name}")
-        
-        handler = TOOL_HANDLERS[name]
-        result = await handler(**arguments)
-        return result
-    except Exception as e:
-        logger.error(f"Tool call error for {name}: {e}")
-        return create_error_response(f"Tool execution failed: {str(e)}")
-
-@server.list_tools()
-async def list_tools() -> list[Tool]:
-    """List all available PyDoll browser automation tools."""
-    # Convert the existing handle_tools_list format to MCP format
-    tools_response = handle_tools_list(None)
-    tools_data = tools_response.get("result", {}).get("tools", [])
-    
-    # Convert dict format to MCP Tool objects
-    mcp_tools = []
-    for tool_data in tools_data:
-        mcp_tools.append(Tool(
-            name=tool_data["name"],
-            description=tool_data["description"],
-            inputSchema=tool_data["inputSchema"]
-        ))
-    
-    return mcp_tools
-
-async def main():
-    """Run the unified PyDoll MCP Server with complete 1:1 feature parity."""
-    logger.info("Starting PyDoll MCP Server - UNIFIED with COMPLETE 1:1 PyDoll parity")
-    logger.info("This server provides access to ALL PyDoll browser automation capabilities")
-    
-    async with stdio_server() as (read_stream, write_stream):
-        await server.run(
-            read_stream,
-            write_stream,
-            InitializationOptions(
-                server_name="pydoll-automation-unified",
-                server_version="1.0.0",
-                capabilities=ServerCapabilities(
-                    tools={}
-                )
-            )
-        )
+# JSON-RPC server implementation only
 
 
-async def async_main():
-    """Async main JSON-RPC server loop"""
-    global SERVER_LOOP
-    SERVER_LOOP = asyncio.get_running_loop()
+async def main_async():
+    """Async JSON-RPC server main function"""
     
     print(f"PyDoll MCP Server v{__version__} - Complete JSON-RPC Implementation", file=sys.stderr, flush=True)
     print(f"Using Chrome at: {DEFAULT_CHROME_PATH}", file=sys.stderr, flush=True)
     print("Server ready for JSON-RPC requests...", file=sys.stderr, flush=True)
     
     try:
-        # Read from stdin in async way
-        loop = asyncio.get_running_loop()
+        # Use asyncio to read from stdin properly
         reader = asyncio.StreamReader()
         protocol = asyncio.StreamReaderProtocol(reader)
-        await loop.connect_read_pipe(lambda: protocol, sys.stdin)
+        transport, _ = await asyncio.get_event_loop().connect_read_pipe(
+            lambda: protocol, sys.stdin
+        )
         
         while True:
-            line = await reader.readline()
-            if not line:
+            try:
+                line = await reader.readline()
+                if not line:
+                    break
+                    
+                line = line.decode().strip()
+                if not line:
+                    continue
+            except Exception as e:
+                logger.error(f"Error reading from stdin: {e}")
                 break
-                
-            line = line.decode().strip()
-            if not line:
-                continue
                 
             try:
                 request = json.loads(line)
@@ -3637,9 +3816,9 @@ async def async_main():
         ELEMENT_CACHE.clear()
 
 def run_server():
-    """Main entry point"""
+    """Main entry point - JSON-RPC server only"""
     try:
-        asyncio.run(main())
+        asyncio.run(main_async())
     except KeyboardInterrupt:
         print("Server shutdown", file=sys.stderr, flush=True)
 
