@@ -147,6 +147,177 @@ def setup_pydoll_path():
 # Setup PyDoll before importing
 setup_pydoll_path()
 
+# Auto-Update System
+import urllib.request
+import urllib.error
+import shutil
+import subprocess
+import time
+from datetime import datetime
+
+CURRENT_VERSION = "0.9.0"  # Current version - update this when changing the code
+VERSION_URL = "https://raw.githubusercontent.com/coffeegrind123/pydoll-mcp/refs/heads/master/version"
+BINARY_URL = "https://raw.githubusercontent.com/coffeegrind123/pydoll-mcp/refs/heads/master/pydoll-mcp"
+UPDATE_CACHE_FILE = "/tmp/pydoll-mcp-update-cache"
+
+def check_for_updates():
+    """Check for updates using conditional requests to minimize bandwidth"""
+    try:
+        # Check if we have cached update info
+        cache_data = None
+        if os.path.exists(UPDATE_CACHE_FILE):
+            try:
+                with open(UPDATE_CACHE_FILE, 'r') as f:
+                    cache_data = json.load(f)
+            except:
+                cache_data = None
+        
+        # Prepare conditional request headers
+        headers = {'User-Agent': 'pydoll-mcp-updater/1.0'}
+        if cache_data and 'etag' in cache_data:
+            headers['If-None-Match'] = cache_data['etag']
+        if cache_data and 'last_modified' in cache_data:
+            headers['If-Modified-Since'] = cache_data['last_modified']
+        
+        # Create request with conditional headers
+        request = urllib.request.Request(VERSION_URL, headers=headers)
+        
+        try:
+            with urllib.request.urlopen(request, timeout=10) as response:
+                remote_version = response.read().decode('utf-8').strip()
+                
+                # Cache the response metadata
+                cache_info = {
+                    'version': remote_version,
+                    'check_time': time.time(),
+                    'etag': response.headers.get('ETag'),
+                    'last_modified': response.headers.get('Last-Modified')
+                }
+                
+                try:
+                    with open(UPDATE_CACHE_FILE, 'w') as f:
+                        json.dump(cache_info, f)
+                except:
+                    pass  # Cache write failure is non-critical
+                
+                return remote_version
+                
+        except urllib.error.HTTPError as e:
+            if e.code == 304:  # Not Modified
+                # Use cached version if available
+                if cache_data and 'version' in cache_data:
+                    print(f"Version check: No changes detected (cached: {cache_data['version']})", file=sys.stderr)
+                    return cache_data['version']
+                else:
+                    print("Version check: No changes detected but no cache available", file=sys.stderr)
+                    return CURRENT_VERSION
+            else:
+                raise e
+                
+    except Exception as e:
+        print(f"Update check failed: {e}", file=sys.stderr)
+        return None
+
+def perform_update():
+    """Download and install the updated version"""
+    try:
+        print("Downloading updated pydoll-mcp...", file=sys.stderr)
+        
+        # Download to temporary file
+        temp_file = f"/tmp/pydoll-mcp-update-{int(time.time())}"
+        
+        request = urllib.request.Request(BINARY_URL, headers={'User-Agent': 'pydoll-mcp-updater/1.0'})
+        with urllib.request.urlopen(request, timeout=30) as response:
+            with open(temp_file, 'wb') as f:
+                shutil.copyfileobj(response, f)
+        
+        # Verify the downloaded file is executable Python
+        try:
+            with open(temp_file, 'r') as f:
+                first_line = f.readline()
+                if not first_line.startswith('#!/usr/bin/env python'):
+                    raise Exception("Downloaded file doesn't appear to be a Python script")
+        except Exception as e:
+            os.unlink(temp_file)
+            raise Exception(f"Downloaded file validation failed: {e}")
+        
+        # Make executable
+        os.chmod(temp_file, 0o755)
+        
+        # Get current script path
+        current_script = os.path.abspath(__file__)
+        backup_file = f"{current_script}.backup.{int(time.time())}"
+        
+        # Create backup of current version
+        shutil.copy2(current_script, backup_file)
+        print(f"Created backup: {backup_file}", file=sys.stderr)
+        
+        # Replace current script with new version
+        shutil.move(temp_file, current_script)
+        print(f"Updated pydoll-mcp successfully", file=sys.stderr)
+        
+        # Clean up old backups (keep only last 3)
+        try:
+            import glob
+            backup_pattern = f"{current_script}.backup.*"
+            backups = sorted(glob.glob(backup_pattern))
+            if len(backups) > 3:
+                for old_backup in backups[:-3]:
+                    os.unlink(old_backup)
+                    print(f"Removed old backup: {old_backup}", file=sys.stderr)
+        except:
+            pass  # Backup cleanup is non-critical
+        
+        # Clear update cache so next run will check again
+        try:
+            os.unlink(UPDATE_CACHE_FILE)
+        except:
+            pass
+        
+        return True
+        
+    except Exception as e:
+        print(f"Update failed: {e}", file=sys.stderr)
+        # Clean up temp file if it exists
+        try:
+            os.unlink(temp_file)
+        except:
+            pass
+        return False
+
+def auto_update_check():
+    """Perform automatic update check and update if needed"""
+    try:
+        print(f"Checking for updates (current version: {CURRENT_VERSION})...", file=sys.stderr)
+        remote_version = check_for_updates()
+        
+        if remote_version is None:
+            print("Update check failed, continuing with current version", file=sys.stderr)
+            return False
+        
+        if remote_version != CURRENT_VERSION:
+            print(f"New version available: {remote_version} (current: {CURRENT_VERSION})", file=sys.stderr)
+            
+            if perform_update():
+                print("Update completed successfully. Restarting...", file=sys.stderr)
+                # Restart the script with same arguments
+                os.execv(sys.executable, [sys.executable] + sys.argv)
+            else:
+                print("Update failed, continuing with current version", file=sys.stderr)
+                return False
+        else:
+            print(f"Already running latest version: {CURRENT_VERSION}", file=sys.stderr)
+            
+        return True
+        
+    except Exception as e:
+        print(f"Auto-update error: {e}", file=sys.stderr)
+        return False
+
+# Perform auto-update check on startup (unless disabled)
+if "--no-update" not in sys.argv and os.getenv("PYDOLL_MCP_NO_UPDATE") != "1":
+    auto_update_check()
+
 # Ensure unbuffered output for JSON-RPC
 sys.stdout = os.fdopen(sys.stdout.fileno(), 'w', 1)
 sys.stderr = os.fdopen(sys.stderr.fileno(), 'w', 1)
