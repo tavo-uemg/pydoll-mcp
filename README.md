@@ -7,59 +7,52 @@ A comprehensive browser automation toolkit providing Chrome/Chromium control thr
 
 ### Linux/macOS:
 
-1. **Download and install:**
-   ```bash
-   # Create virtual environment
-   python3 -m venv ~/.pydoll-mcp-env
-   source ~/.pydoll-mcp-env/bin/activate
-   
-   # Install dependencies
-   pip install pydoll
-   
-   # Download the script
-   curl -o /usr/local/bin/pydoll-mcp https://raw.githubusercontent.com/coffeegrind123/pydoll-mcp/refs/heads/master/pydoll-mcp
-   chmod +x /usr/local/bin/pydoll-mcp
-   
-   # Add to Claude Code
-   claude mcp remove pydoll-mcp && claude mcp add --scope user pydoll-mcp /usr/local/bin/pydoll-mcp
-   ```
+```bash
+# Clone the repository
+git clone https://github.com/coffeegrind123/pydoll-mcp.git
+cd pydoll-mcp
+
+# Create virtual environment and install dependencies
+python3 -m venv venv
+source venv/bin/activate
+pip install -r requirements.txt
+
+# Add to Claude Code
+claude mcp remove pydoll-mcp && claude mcp add --scope user pydoll-mcp $(pwd)/pydoll-mcp
+```
 
 ### Windows:
 
-1. **Setup virtual environment and dependencies:**
-   ```powershell
-   # Create virtual environment
-   python -m venv "$env:USERPROFILE\.pydoll-mcp-env"
-   
-   # Activate virtual environment
-   & "$env:USERPROFILE\.pydoll-mcp-env\Scripts\Activate.ps1"
-   
-   # Install dependencies
-   pip install pydoll
-   ```
+```powershell
+# Clone the repository
+git clone https://github.com/coffeegrind123/pydoll-mcp.git
+cd pydoll-mcp
 
-2. **Download the pydoll-mcp script:**
-   ```powershell
-   Invoke-WebRequest -Uri "https://raw.githubusercontent.com/coffeegrind123/pydoll-mcp/refs/heads/master/pydoll-mcp" -OutFile "$env:USERPROFILE\pydoll-mcp"
-   ```
+# Create virtual environment and install dependencies
+python -m venv venv
+.\venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+```
 
-3. **Add to Claude Desktop:**
-   Manually edit your Claude Desktop configuration file at:
-   `%APPDATA%\Claude\claude_desktop_config.json`
-   
-   Add this configuration:
-   ```json
-   {
-     "mcpServers": {
-       "pydoll-mcp": {
-         "command": "%USERPROFILE%\\.pydoll-mcp-env\\Scripts\\python.exe",
-         "args": ["%USERPROFILE%\\pydoll-mcp"]
-       }
-     }
-   }
-   ```
+**Add to Claude Desktop:**
+Manually edit your Claude Desktop configuration file at:
+`%APPDATA%\Claude\claude_desktop_config.json`
 
-4. **Restart Claude Desktop** to load the MCP server.
+Add this configuration:
+```json
+{
+  "mcpServers": {
+    "pydoll-mcp": {
+      "command": "C:\\path\\to\\pydoll-mcp\\venv\\Scripts\\python.exe",
+      "args": ["C:\\path\\to\\pydoll-mcp\\pydoll-mcp"]
+    }
+  }
+}
+```
+
+**Note:** Replace `C:\\path\\to\\pydoll-mcp` with your actual clone directory path.
+
+**Restart Claude Desktop** to load the MCP server.
 
 ## Quick Start
 
