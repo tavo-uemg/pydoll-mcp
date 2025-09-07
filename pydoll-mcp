@@ -1419,6 +1419,17 @@ async def create_browser_session(
         options.add_argument("--disable-web-security")
         options.add_argument("--disable-extensions")
         
+        # Add anti-detection arguments to avoid Cloudflare blocking (default stealth mode)
+        # Hide automation indicators (this was key to success with Cloudflare)
+        options.add_argument("--disable-blink-features=AutomationControlled")
+        
+        # Check if user_agent or additional_args already contains a user-agent
+        has_user_agent_override = user_agent or (additional_args and any('--user-agent' in arg for arg in additional_args))
+        
+        # Set realistic user agent as default if not overridden (this was key to bypassing Cloudflare)
+        if not has_user_agent_override:
+            options.add_argument("--user-agent=Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36")
+        
         if headless:
             options.add_argument("--headless")
         if window_size:
@@ -1475,6 +1486,13 @@ async def start_browser_session(session_id: str) -> Dict[str, Any]:
             TAB_SESSIONS[initial_tab_id] = initial_tab
             logger.info(f"Initial tab stored with ID {initial_tab_id}")
             
+            # Automatically enable Cloudflare bypass for initial tab
+            try:
+                await initial_tab.enable_auto_solve_cloudflare_captcha()
+                logger.info(f"Auto Cloudflare bypass enabled for initial tab {initial_tab_id}")
+            except Exception as e:
+                logger.warning(f"Failed to enable auto Cloudflare bypass for initial tab {initial_tab_id}: {e}")
+            
             return create_success_response(f"Browser session '{session_id}' started with initial tab '{initial_tab_id}'")
             
         except asyncio.TimeoutError:
@@ -1524,6 +1542,82 @@ async def close_browser_session(session_id: str) -> Dict[str, Any]:
 
 # === NAVIGATION ===
 
+async def _detect_cloudflare_protection(tab) -> bool:
+    """Detect if the current page has Cloudflare protection"""
+    try:
+        # Check for common Cloudflare indicators
+        cloudflare_indicators = [
+            "cf-turnstile",  # Turnstile captcha
+            "cf-im-under-attack",  # Under attack mode
+            "cloudflare-challenge",  # Challenge page
+            "Attention Required!",  # Block page title
+            "Checking your browser",  # Verification page
+            "jschl-answer",  # JavaScript challenge
+            "jschl_vc",  # Challenge token
+        ]
+        
+        # Get page content and check for indicators
+        page_content = await tab.evaluate("document.documentElement.outerHTML")
+        page_title = await tab.evaluate("document.title")
+        
+        # Check if any indicators are present
+        for indicator in cloudflare_indicators:
+            if indicator.lower() in page_content.lower() or indicator.lower() in page_title.lower():
+                return True
+        
+        # Check for specific Cloudflare elements
+        try:
+            turnstile_element = await tab.wait_element(By.CLASS_NAME, "cf-turnstile", timeout=1, raise_exc=False)
+            if turnstile_element:
+                return True
+        except:
+            pass
+            
+        return False
+    except Exception:
+        return False
+
+
+async def _attempt_cloudflare_bypass(tab) -> bool:
+    """Attempt to bypass Cloudflare protection using direct approach"""
+    try:
+        # Wait a moment for the page to stabilize
+        await asyncio.sleep(3)
+        
+        # Try to find and click the turnstile captcha
+        try:
+            captcha = await tab.find_element(By.CSS_SELECTOR, ".cf-turnstile")
+            await captcha.click(x_offset=-125, y_offset=0)
+            print('Clicked Cloudflare captcha')
+            # Wait for the captcha to be processed
+            await asyncio.sleep(5)
+            return True
+        except Exception:
+            # If turnstile not found or click failed, try alternative approaches
+            pass
+        
+        # Try PyDoll's built-in methods as fallback
+        try:
+            async with tab.expect_and_bypass_cloudflare_captcha(timeout=10):
+                pass  # Just wait for any existing captcha to be handled
+            return True
+        except Exception:
+            pass
+        
+        # Try enable/disable approach as another fallback
+        try:
+            await tab.enable_auto_solve_cloudflare_captcha(timeout=5)
+            await asyncio.sleep(2)
+            await tab.disable_auto_solve_cloudflare_captcha()
+            return True
+        except Exception:
+            pass
+        
+        return False
+    except Exception:
+        return False
+
+
 async def navigate(tab_id: str, url: str, wait_until: str = "load") -> Dict[str, Any]:
     """Navigate tab to specified URL with page load waiting"""
     try:
@@ -1535,10 +1629,24 @@ async def navigate(tab_id: str, url: str, wait_until: str = "load") -> Dict[str,
         timeout_map = {"load": 60, "domcontentloaded": 30, "networkidle": 90}
         timeout = timeout_map.get(wait_until, 60)
         
-        # Use correct PyDoll method with timeout
+        # First attempt normal navigation
         await tab.go_to(url, timeout=timeout)
         
-        return create_success_response(f"Successfully navigated to {url}")
+        # Check if Cloudflare protection is detected
+        cloudflare_detected = await _detect_cloudflare_protection(tab)
+        
+        if cloudflare_detected:
+            # Cloudflare detected, attempt bypass using direct approach
+            bypass_successful = await _attempt_cloudflare_bypass(tab)
+            
+            if bypass_successful:
+                return create_success_response(f"Successfully navigated to {url} (Cloudflare bypassed)")
+            else:
+                # If bypass failed, still return success since navigation worked
+                return create_success_response(f"Successfully navigated to {url} (Cloudflare detected but bypass failed)")
+        else:
+            # No Cloudflare detected, normal navigation successful
+            return create_success_response(f"Successfully navigated to {url}")
         
     except Exception as e:
         return create_error_response(f"Failed to navigate: {str(e)}")
@@ -1600,6 +1708,14 @@ async def create_tab(browser_session_id: str, tab_id: str, url: Optional[str] = 
         logger.info(f"Creating new tab {tab_id} for session {browser_session_id}")
         tab = await browser.new_tab(url or "")
         logger.info(f"Tab created successfully: {tab_id}")
+        
+        # Automatically enable Cloudflare bypass for all tabs
+        try:
+            await tab.enable_auto_solve_cloudflare_captcha()
+            logger.info(f"Auto Cloudflare bypass enabled for tab {tab_id}")
+        except Exception as e:
+            logger.warning(f"Failed to enable auto Cloudflare bypass for tab {tab_id}: {e}")
+        
         TAB_SESSIONS[tab_id] = tab
         
         return create_success_response(f"Tab '{tab_id}' created successfully" + (f" and navigated to {url}" if url else ""))
