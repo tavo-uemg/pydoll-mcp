@@ -70,9 +70,9 @@ CRITICAL TOOL QUIRKS & WORKAROUNDS:
    ✗ get_dialog_message() - Limited message retrieval capability
 
 8. CLOUDFLARE BYPASS:
-   ✗ bypass_cloudflare() - WILL timeout on non-protected sites (expected behavior)
-   ✗ expect_and_bypass_cloudflare() - Same timeout behavior (not a bug)
-   ✓ enable/disable_auto_solve_cloudflare() - Control functions work
+   ✓ Automatic bypass built into navigate() and create_tab()
+   ✓ Uses stealth browser configuration by default
+   ✓ No manual bypass tools needed - handled automatically
 
 GENERAL BEST PRACTICES:
 ======================
@@ -159,18 +159,65 @@ try:
     from pydoll.exceptions import *
     from pydoll.protocol.network.types import ErrorReason
     from pydoll.protocol.fetch.types import RequestStage, HeaderEntry
+    from pydoll.commands import RuntimeCommands
+    from pydoll.elements.web_element import WebElement
 except ImportError as e:
     print(f"ERROR: Failed to import PyDoll: {e}", file=sys.stderr, flush=True)
     sys.exit(1)
+
+# Monkey patch PyDoll WebElement to add Shadow DOM support
+async def get_shadow_root_patched(self) -> Optional['WebElement']:
+    """
+    Get the shadow root attached to this element if it exists.
+
+    Returns:
+        WebElement representing the shadow root, or None if no shadow root exists.
+        
+    Raises:
+        ElementNotFound: If element doesn't exist or shadow root access fails.
+    """
+    if not self._object_id:
+        return None
+        
+    try:
+        # Use Runtime.getProperties to check for shadowRoot property
+        response = await self._connection_handler.execute_command(
+            RuntimeCommands.get_properties(object_id=self._object_id)
+        )
+        
+        # Look for shadowRoot property
+        shadow_root_prop = None
+        for prop in response.get('result', {}).get('result', []):
+            if prop.get('name') == 'shadowRoot' and 'objectId' in prop.get('value', {}):
+                shadow_root_prop = prop
+                break
+                
+        if not shadow_root_prop:
+            return None
+            
+        shadow_root_object_id = shadow_root_prop['value']['objectId']
+        
+        # Create a WebElement for the shadow root
+        return WebElement(
+            object_id=shadow_root_object_id,
+            connection_handler=self._connection_handler
+        )
+        
+    except Exception:
+        return None
+
+# Configure logging first
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+# Apply the monkey patch
+WebElement.get_shadow_root = get_shadow_root_patched
+logger.info("Applied Shadow DOM monkey patch to PyDoll WebElement")
 
 # JSON-RPC server - no external MCP dependencies required
 
 # Server version
 __version__ = "3.0.0"
-
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
 
 # JSON-RPC server configuration
 
@@ -995,56 +1042,6 @@ def handle_tools_list(request_id: Any) -> Dict[str, Any]:
                 }
         },
         {
-                "name": "bypass_cloudflare",
-                "description": "Bypass Cloudflare protection automatically",
-                "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "tab_id": {"type": "string", "description": "Tab identifier"},
-                            "url": {"type": "string", "description": "URL to navigate to and bypass Cloudflare"},
-                            "timeout": {"type": "integer", "description": "Timeout in seconds", "default": 30}
-                        },
-                        "required": ["tab_id", "url"]
-                }
-        },
-        {
-                "name": "enable_auto_solve_cloudflare",
-                "description": "Enable automatic Cloudflare captcha solving in background",
-                "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "tab_id": {"type": "string", "description": "Tab identifier"},
-                            "custom_selector": {"type": "string", "description": "Custom selector for Cloudflare element"},
-                            "time_before_click": {"type": "number", "description": "Time to wait before clicking (seconds)", "default": 5}
-                        },
-                        "required": ["tab_id"]
-                }
-        },
-        {
-                "name": "disable_auto_solve_cloudflare",
-                "description": "Disable automatic Cloudflare captcha solving",
-                "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "tab_id": {"type": "string", "description": "Tab identifier"}
-                        },
-                        "required": ["tab_id"]
-                }
-        },
-        {
-                "name": "expect_and_bypass_cloudflare",
-                "description": "Use context manager approach for Cloudflare bypass with waiting",
-                "inputSchema": {
-                        "type": "object",
-                        "properties": {
-                            "tab_id": {"type": "string", "description": "Tab identifier"},
-                            "url": {"type": "string", "description": "URL to navigate to and bypass Cloudflare"},
-                            "custom_selector": {"type": "string", "description": "Custom selector for Cloudflare element (optional)"}
-                        },
-                        "required": ["tab_id", "url"]
-                }
-        },
-        {
                 "name": "handle_alert",
                 "description": "Handle JavaScript alert, confirm, or prompt dialogs",
                 "inputSchema": {
@@ -1482,6 +1479,27 @@ async def start_browser_session(session_id: str) -> Dict[str, Any]:
             initial_tab = await asyncio.wait_for(browser.start(), timeout=60)
             logger.info(f"Browser started successfully for session {session_id}, tab type: {type(initial_tab)}")
             
+            # Inject shadow DOM override script to make all shadow roots open
+            try:
+                shadow_override_script = """
+                    // Override attachShadow to force open mode for better automation access
+                    if (typeof Element !== 'undefined' && Element.prototype.attachShadow) {
+                        Element.prototype._originalAttachShadow = Element.prototype.attachShadow;
+                        Element.prototype.attachShadow = function(options) {
+                            // Always use open mode for automation compatibility
+                            return this._originalAttachShadow.call(this, { mode: "open" });
+                        };
+                    }
+                """
+                
+                await initial_tab._execute_command({
+                    "method": "Page.addScriptToEvaluateOnNewDocument", 
+                    "params": {"source": shadow_override_script}
+                })
+                logger.info(f"Shadow DOM override script injected for initial tab {initial_tab_id}")
+            except Exception as e:
+                logger.warning(f"Failed to inject shadow DOM override: {e}")
+            
             # Store the initial tab
             TAB_SESSIONS[initial_tab_id] = initial_tab
             logger.info(f"Initial tab stored with ID {initial_tab_id}")
@@ -1542,6 +1560,71 @@ async def close_browser_session(session_id: str) -> Dict[str, Any]:
 
 # === NAVIGATION ===
 
+async def _verify_cloudflare_bypass(tab) -> bool:
+    """Verify if Cloudflare bypass was successful by looking for success indicators"""
+    try:
+        await asyncio.sleep(3)  # Wait for success animation/update
+        
+        # Check for success indicators in iframes and main document
+        success_found = await tab.evaluate("""
+            () => {
+                // Check main document first
+                const successSelectors = [
+                    '#success[style*="visible"]',
+                    '.success[style*="visible"]', 
+                    '[id*="success"]:not([style*="none"]):not([style*="hidden"])',
+                    '.cb-container[style*="visible"]',
+                    'svg[id*="success"]',
+                    '[class*="success-circle"]',
+                    '[class*="success-checkmark"]',
+                    'span:contains("Success")',
+                    'div:contains("Success")'
+                ];
+                
+                for (const selector of successSelectors) {
+                    try {
+                        const elements = document.querySelectorAll(selector);
+                        for (const el of elements) {
+                            if (el.offsetWidth > 0 && el.offsetHeight > 0 && 
+                                !el.style.display.includes('none') && 
+                                !el.style.visibility.includes('hidden')) {
+                                return true;
+                            }
+                        }
+                    } catch (e) {
+                        continue;
+                    }
+                }
+                
+                // Check all iframes for success indicators
+                const iframes = document.querySelectorAll('iframe');
+                for (const iframe of iframes) {
+                    try {
+                        const doc = iframe.contentDocument || iframe.contentWindow.document;
+                        if (!doc) continue;
+                        
+                        for (const selector of successSelectors) {
+                            const elements = doc.querySelectorAll(selector);
+                            for (const el of elements) {
+                                if (el.offsetWidth > 0 && el.offsetHeight > 0) {
+                                    return true;
+                                }
+                            }
+                        }
+                    } catch (e) {
+                        continue;
+                    }
+                }
+                
+                return false;
+            }
+        """)
+        
+        return success_found
+    except Exception:
+        return False
+
+
 async def _detect_cloudflare_protection(tab) -> bool:
     """Detect if the current page has Cloudflare protection"""
     try:
@@ -1578,33 +1661,462 @@ async def _detect_cloudflare_protection(tab) -> bool:
         return False
 
 
+async def _find_and_click_in_cross_origin_iframe(tab) -> bool:
+    """Use CDP commands to access cross-origin iframes and find Turnstile checkbox"""
+    try:
+        print("DEBUG: Starting CDP iframe access...")
+        
+        # Get document with full depth to see all frames
+        doc_response = await tab._execute_command({
+            "method": "DOM.getDocument", 
+            "params": {"depth": -1, "pierce": True}
+        })
+        print(f"DEBUG: Got document response: {doc_response.get('result', {}).get('root', {}).get('nodeId', 'N/A')}")
+        
+        # Find all iframe elements
+        iframe_query = await tab._execute_command({
+            "method": "DOM.querySelectorAll",
+            "params": {
+                "nodeId": doc_response["result"]["root"]["nodeId"],
+                "selector": "iframe"
+            }
+        })
+        
+        iframe_count = len(iframe_query["result"]["nodeIds"])
+        print(f"DEBUG: Found {iframe_count} iframe elements")
+        
+        for i, node_id in enumerate(iframe_query["result"]["nodeIds"]):
+            try:
+                print(f"DEBUG: Processing iframe {i+1}/{iframe_count}, nodeId: {node_id}")
+                
+                # Get iframe description to access frameId
+                iframe_desc = await tab._execute_command({
+                    "method": "DOM.describeNode",
+                    "params": {"nodeId": node_id}
+                })
+                
+                frame_info = iframe_desc["result"]["node"]
+                print(f"DEBUG: Iframe {i+1} info: {frame_info.get('attributes', [])} hasContentDocument: {'contentDocument' in frame_info} hasFrameId: {'frameId' in frame_info}")
+                
+                # Check if this might be a challenge iframe
+                if ("contentDocument" not in frame_info and 
+                    "frameId" in frame_info):
+                    
+                    frame_id = frame_info["frameId"]
+                    print(f"DEBUG: Found potential cross-origin iframe with frameId: {frame_id}")
+                    
+                    # Get targets to see available frames
+                    targets = await tab._execute_command({
+                        "method": "Target.getTargets", 
+                        "params": {}
+                    })
+                    
+                    iframe_targets = [t for t in targets["result"]["targetInfos"] if t.get("type") == "iframe"]
+                    print(f"DEBUG: Found {len(iframe_targets)} iframe targets: {[t.get('targetId') for t in iframe_targets]}")
+                    
+                    # Look for target matching our frameId or just take first iframe target
+                    target_id = None
+                    for target in iframe_targets:
+                        if target.get("type") == "iframe":
+                            target_id = target["targetId"]
+                            print(f"DEBUG: Selected target: {target_id} url: {target.get('url', 'N/A')}")
+                            break
+                    
+                    if target_id:
+                        try:
+                            print(f"DEBUG: Attempting to attach to target: {target_id}")
+                            
+                            # Create session for iframe target
+                            session_response = await tab._execute_command({
+                                "method": "Target.attachToTarget",
+                                "params": {"targetId": target_id, "flatten": True}
+                            })
+                            
+                            session_id = session_response["result"]["sessionId"]
+                            print(f"DEBUG: Created iframe session: {session_id}")
+                            
+                            # Enable DOM for iframe session
+                            dom_enable_response = await tab._execute_command({
+                                "method": "DOM.enable",
+                                "params": {},
+                                "sessionId": session_id
+                            })
+                            print(f"DEBUG: DOM enabled for iframe session: {dom_enable_response}")
+                            
+                            # Add delay for iframe to fully load
+                            await asyncio.sleep(1)
+                            
+                            # Get iframe document
+                            iframe_doc = await tab._execute_command({
+                                "method": "DOM.getDocument",
+                                "params": {"depth": -1, "pierce": True},
+                                "sessionId": session_id
+                            })
+                            print(f"DEBUG: Got iframe document: {iframe_doc.get('result', {}).get('root', {}).get('nodeId', 'N/A')}")
+                            
+                            # Look for checkboxes and clickable elements in iframe
+                            selectors = [
+                                'input[type="checkbox"]',
+                                '[role="checkbox"]',
+                                'button',
+                                '[role="button"]',
+                                '.cb-i', '.cb-c',
+                                '[onclick]',
+                                'div', 'span', 'label'  # Add more generic selectors
+                            ]
+                            
+                            for selector in selectors:
+                                try:
+                                    print(f"DEBUG: Searching for selector '{selector}' in iframe...")
+                                    
+                                    element_query = await tab._execute_command({
+                                        "method": "DOM.querySelector",
+                                        "params": {
+                                            "nodeId": iframe_doc["result"]["root"]["nodeId"],
+                                            "selector": selector
+                                        },
+                                        "sessionId": session_id
+                                    })
+                                    
+                                    element_node_id = element_query["result"]["nodeId"]
+                                    if element_node_id:
+                                        print(f"DEBUG: Found element with selector '{selector}', nodeId: {element_node_id}")
+                                        
+                                        # Get element details
+                                        element_desc = await tab._execute_command({
+                                            "method": "DOM.describeNode",
+                                            "params": {"nodeId": element_node_id},
+                                            "sessionId": session_id
+                                        })
+                                        print(f"DEBUG: Element details: {element_desc.get('result', {}).get('node', {})}")
+                                        
+                                        # Focus element first
+                                        focus_response = await tab._execute_command({
+                                            "method": "DOM.focus",
+                                            "params": {"nodeId": element_node_id},
+                                            "sessionId": session_id
+                                        })
+                                        print(f"DEBUG: Focus response: {focus_response}")
+                                        
+                                        # Get element bounds for clicking
+                                        box_model = await tab._execute_command({
+                                            "method": "DOM.getBoxModel",
+                                            "params": {"nodeId": element_node_id},
+                                            "sessionId": session_id
+                                        })
+                                        print(f"DEBUG: Box model response: {box_model}")
+                                        
+                                        if "result" in box_model and "content" in box_model["result"]:
+                                            content = box_model["result"]["content"]
+                                            # Calculate center point
+                                            x = (content[0] + content[4]) / 2
+                                            y = (content[1] + content[5]) / 2
+                                            print(f"DEBUG: Click coordinates: x={x}, y={y}")
+                                            
+                                            # Try multiple click methods
+                                            click_methods = [
+                                                # Method 1: Standard mouse events
+                                                lambda: _execute_mouse_click(tab, session_id, x, y, "standard"),
+                                                # Method 2: JavaScript click
+                                                lambda: _execute_js_click(tab, session_id, element_node_id),
+                                                # Method 3: Touch events (mobile simulation)
+                                                lambda: _execute_touch_click(tab, session_id, x, y)
+                                            ]
+                                            
+                                            for method_idx, click_method in enumerate(click_methods):
+                                                try:
+                                                    print(f"DEBUG: Attempting click method {method_idx + 1}")
+                                                    await click_method()
+                                                    await asyncio.sleep(0.5)  # Small delay between attempts
+                                                    
+                                                    print(f'DEBUG: Clicked {selector} in cross-origin iframe via CDP (method {method_idx + 1})')
+                                                    
+                                                    # Clean up session and return success
+                                                    await tab._execute_command({
+                                                        "method": "Target.detachFromTarget",
+                                                        "params": {"sessionId": session_id}
+                                                    })
+                                                    
+                                                    return True
+                                                    
+                                                except Exception as click_error:
+                                                    print(f"DEBUG: Click method {method_idx + 1} failed: {click_error}")
+                                                    continue
+                                            
+                                except Exception as selector_error:
+                                    print(f"DEBUG: Selector '{selector}' failed: {selector_error}")
+                                    continue
+                            
+                            print("DEBUG: No clickable elements found in iframe")
+                            
+                            # Clean up session if we get here
+                            await tab._execute_command({
+                                "method": "Target.detachFromTarget", 
+                                "params": {"sessionId": session_id}
+                            })
+                            
+                        except Exception as target_error:
+                            print(f"DEBUG: Target attachment failed: {target_error}")
+                            continue
+                    else:
+                        print("DEBUG: No iframe targets found")
+                        
+            except Exception as iframe_error:
+                print(f"DEBUG: Processing iframe {i+1} failed: {iframe_error}")
+                continue
+        
+        print("DEBUG: CDP iframe access completed - no successful clicks")
+        return False
+        
+    except Exception as main_error:
+        print(f"DEBUG: CDP iframe access main error: {main_error}")
+        return False
+
+
+async def _execute_mouse_click(tab, session_id, x, y, method_name):
+    """Execute standard mouse click events"""
+    print(f"DEBUG: Executing {method_name} mouse click at ({x}, {y})")
+    
+    # Mouse press
+    press_response = await tab._execute_command({
+        "method": "Input.dispatchMouseEvent",
+        "params": {
+            "type": "mousePressed",
+            "x": x,
+            "y": y,
+            "button": "left",
+            "clickCount": 1
+        },
+        "sessionId": session_id
+    })
+    print(f"DEBUG: Mouse press response: {press_response}")
+    
+    await asyncio.sleep(0.1)  # Brief delay between press and release
+    
+    # Mouse release
+    release_response = await tab._execute_command({
+        "method": "Input.dispatchMouseEvent",
+        "params": {
+            "type": "mouseReleased",
+            "x": x,
+            "y": y,
+            "button": "left",
+            "clickCount": 1
+        },
+        "sessionId": session_id
+    })
+    print(f"DEBUG: Mouse release response: {release_response}")
+
+
+async def _execute_js_click(tab, session_id, node_id):
+    """Execute JavaScript click on element"""
+    print(f"DEBUG: Executing JavaScript click on nodeId: {node_id}")
+    
+    # Try to click via JavaScript
+    js_response = await tab._execute_command({
+        "method": "Runtime.evaluate",
+        "params": {
+            "expression": f"""
+                const element = document.querySelector('*');
+                if (element) {{
+                    element.click();
+                    'clicked';
+                }} else {{
+                    'element not found';
+                }}
+            """
+        },
+        "sessionId": session_id
+    })
+    print(f"DEBUG: JavaScript click response: {js_response}")
+
+
+async def _execute_touch_click(tab, session_id, x, y):
+    """Execute touch events for mobile simulation"""
+    print(f"DEBUG: Executing touch click at ({x}, {y})")
+    
+    # Touch start
+    touch_start = await tab._execute_command({
+        "method": "Input.dispatchTouchEvent",
+        "params": {
+            "type": "touchStart",
+            "touchPoints": [{
+                "x": x,
+                "y": y,
+                "radiusX": 1,
+                "radiusY": 1
+            }]
+        },
+        "sessionId": session_id
+    })
+    print(f"DEBUG: Touch start response: {touch_start}")
+    
+    await asyncio.sleep(0.1)
+    
+    # Touch end
+    touch_end = await tab._execute_command({
+        "method": "Input.dispatchTouchEvent",
+        "params": {
+            "type": "touchEnd",
+            "touchPoints": []
+        },
+        "sessionId": session_id
+    })
+    print(f"DEBUG: Touch end response: {touch_end}")
+
+
 async def _attempt_cloudflare_bypass(tab) -> bool:
-    """Attempt to bypass Cloudflare protection using direct approach"""
+    """Attempt to bypass Cloudflare protection using comprehensive nested structure approach"""
     try:
         # Wait a moment for the page to stabilize
         await asyncio.sleep(3)
         
-        # Try to find and click the turnstile captcha
+        # Strategy 1: Direct DOM search for turnstile
         try:
-            captcha = await tab.find_element(By.CSS_SELECTOR, ".cf-turnstile")
-            await captcha.click(x_offset=-125, y_offset=0)
-            print('Clicked Cloudflare captcha')
-            # Wait for the captcha to be processed
-            await asyncio.sleep(5)
-            return True
+            captcha = await tab.find_element(By.CSS_SELECTOR, ".cf-turnstile", timeout=2, raise_exc=False)
+            if captcha:
+                await captcha.click(x_offset=-125, y_offset=0)
+                print('Clicked Cloudflare captcha (direct DOM)')
+                if await _verify_cloudflare_bypass(tab):
+                    print('Cloudflare bypass verified successful (direct DOM)')
+                    return True
         except Exception:
-            # If turnstile not found or click failed, try alternative approaches
             pass
         
-        # Try PyDoll's built-in methods as fallback
+        # Strategy 2: Deep nested search - iframes and shadow DOM
+        try:
+            # First level: check all iframes for Cloudflare challenge content
+            iframes = await tab.find_elements(By.TAG_NAME, "iframe")
+            
+            for iframe in iframes:
+                try:
+                    # Check if iframe might contain challenge (by src, title, or size)
+                    iframe_src = await iframe.get_attribute('src') or ''
+                    iframe_title = await iframe.get_attribute('title') or ''
+                    
+                    is_challenge_iframe = (
+                        'cloudflare' in iframe_src.lower() or
+                        'challenge' in iframe_src.lower() or 
+                        'turnstile' in iframe_src.lower() or
+                        'challenge' in iframe_title.lower() or
+                        'security' in iframe_title.lower()
+                    )
+                    
+                    if is_challenge_iframe:
+                        # Try to access iframe content and find captcha elements
+                        try:
+                            # Click the iframe itself first (sometimes needed for focus)
+                            await iframe.click()
+                            await asyncio.sleep(1)
+                            
+                            # Look for common captcha patterns inside iframe using JavaScript
+                            captcha_found = await tab.evaluate("""
+                                (iframe) => {
+                                    try {
+                                        const doc = iframe.contentDocument || iframe.contentWindow.document;
+                                        if (!doc) return null;
+                                        
+                                        // Look for checkbox-style captcha elements
+                                        const selectors = [
+                                            'input[type="checkbox"]',
+                                            '[role="checkbox"]', 
+                                            'button',
+                                            '[role="button"]',
+                                            '.cb-i', '.cb-c',  // common checkbox classes
+                                            '[onclick]',
+                                            '.clickable'
+                                        ];
+                                        
+                                        for (const selector of selectors) {
+                                            const elements = doc.querySelectorAll(selector);
+                                            for (const el of elements) {
+                                                if (el.offsetWidth > 0 && el.offsetHeight > 0) {
+                                                    // Found a visible interactive element
+                                                    el.click();
+                                                    return true;
+                                                }
+                                            }
+                                        }
+                                        return false;
+                                    } catch (e) {
+                                        return null;
+                                    }
+                                }
+                            """, iframe)
+                            
+                            if captcha_found:
+                                print('Clicked Cloudflare captcha (iframe content)')
+                                # Wait and verify success
+                                if await _verify_cloudflare_bypass(tab):
+                                    print('Cloudflare bypass verified successful')
+                                    return True
+                                
+                        except Exception:
+                            # If can't access iframe content, try clicking iframe with offset
+                            await iframe.click(x_offset=-50, y_offset=0)
+                            print('Clicked Cloudflare captcha (iframe with offset)')
+                            if await _verify_cloudflare_bypass(tab):
+                                print('Cloudflare bypass verified successful (iframe offset)')
+                                return True
+                            
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        
+        # Strategy 3: Shadow DOM search with deep traversal
+        try:
+            # Look for elements that might have shadow roots
+            potential_hosts = await tab.find_elements(By.TAG_NAME, "*")
+            
+            for host in potential_hosts[:50]:  # Limit to prevent timeout
+                try:
+                    shadow_root = await host.get_shadow_root()
+                    if shadow_root:
+                        # Check for turnstile in shadow root
+                        turnstile = await shadow_root.find_element(By.CSS_SELECTOR, ".cf-turnstile", timeout=1, raise_exc=False)
+                        if turnstile:
+                            await turnstile.click(x_offset=-125, y_offset=0)
+                            print('Clicked Cloudflare captcha (shadow DOM)')
+                            if await _verify_cloudflare_bypass(tab):
+                                print('Cloudflare bypass verified successful (shadow DOM)')
+                                return True
+                        
+                        # Also check for iframes within shadow root
+                        shadow_iframes = await shadow_root.find_elements(By.TAG_NAME, "iframe", timeout=1, raise_exc=False)
+                        for shadow_iframe in shadow_iframes:
+                            try:
+                                await shadow_iframe.click(x_offset=-50, y_offset=0)
+                                print('Clicked Cloudflare captcha (shadow iframe)')
+                                if await _verify_cloudflare_bypass(tab):
+                                    print('Cloudflare bypass verified successful (shadow iframe)')
+                                    return True
+                            except Exception:
+                                continue
+                                
+                except Exception:
+                    continue
+        except Exception:
+            pass
+        
+        # Strategy 4: CDP cross-origin iframe access
+        try:
+            if await _find_and_click_in_cross_origin_iframe(tab):
+                print('Clicked Cloudflare captcha (CDP cross-origin)')
+                if await _verify_cloudflare_bypass(tab):
+                    print('Cloudflare bypass verified successful (CDP cross-origin)')
+                    return True
+        except Exception:
+            pass
+        
+        # Strategy 5: Fallback to PyDoll's built-in methods
         try:
             async with tab.expect_and_bypass_cloudflare_captcha(timeout=10):
-                pass  # Just wait for any existing captcha to be handled
+                pass
             return True
         except Exception:
             pass
         
-        # Try enable/disable approach as another fallback
         try:
             await tab.enable_auto_solve_cloudflare_captcha(timeout=5)
             await asyncio.sleep(2)
@@ -1708,6 +2220,27 @@ async def create_tab(browser_session_id: str, tab_id: str, url: Optional[str] = 
         logger.info(f"Creating new tab {tab_id} for session {browser_session_id}")
         tab = await browser.new_tab(url or "")
         logger.info(f"Tab created successfully: {tab_id}")
+        
+        # Inject shadow DOM override script for this tab too
+        try:
+            shadow_override_script = """
+                // Override attachShadow to force open mode for better automation access
+                if (typeof Element !== 'undefined' && Element.prototype.attachShadow) {
+                    Element.prototype._originalAttachShadow = Element.prototype.attachShadow;
+                    Element.prototype.attachShadow = function(options) {
+                        // Always use open mode for automation compatibility
+                        return this._originalAttachShadow.call(this, { mode: "open" });
+                    };
+                }
+            """
+            
+            await tab._execute_command({
+                "method": "Page.addScriptToEvaluateOnNewDocument", 
+                "params": {"source": shadow_override_script}
+            })
+            logger.info(f"Shadow DOM override script injected for tab {tab_id}")
+        except Exception as e:
+            logger.warning(f"Failed to inject shadow DOM override for tab {tab_id}: {e}")
         
         # Automatically enable Cloudflare bypass for all tabs
         try:
@@ -3370,158 +3903,6 @@ async def wait_for_function(
     except Exception as e:
         return create_error_response(f"Wait for function failed: {str(e)}")
 
-async def bypass_cloudflare(tab_id: str, url: str, timeout: int = 30):
-    """
-    Bypass Cloudflare protection automatically.
-    
-    QUIRKS & USAGE NOTES:
-    =====================
-    1. EXPECTED TIMEOUT BEHAVIOR: This function will timeout when there's NO Cloudflare
-       protection on the target site. This is NORMAL and EXPECTED behavior, not a bug.
-       
-    2. DESIGNED FOR PROTECTED SITES: These tools are specifically designed for sites
-       that actually have Cloudflare protection active:
-       ✓ Sites with "Checking your browser" pages
-       ✓ Sites with CAPTCHA challenges  
-       ✓ Sites with "Please wait" Cloudflare screens
-       ✗ Regular sites without Cloudflare protection
-       
-    3. TIMEOUT SCENARIOS:
-       - Regular websites (httpbin.org, google.com): WILL TIMEOUT (expected)
-       - Sites with Cloudflare protection: Will attempt bypass
-       - Misconfigured Cloudflare: May timeout after attempting bypass
-       
-    4. TESTING CLOUDFLARE BYPASS:
-       To properly test, you need a site that actually has Cloudflare protection:
-       - Some Discord servers
-       - Sites behind Cloudflare's "Under Attack" mode
-       - Sites with active Bot Fight Mode
-       
-    5. TIMEOUT VALUES:
-       - 10-30 seconds: Normal timeout for non-protected sites
-       - 30-60 seconds: Reasonable for sites with light protection
-       - 60+ seconds: For sites with complex CAPTCHA challenges
-       
-    6. SUCCESS INDICATORS:
-       ✓ Function completes without timeout
-       ✓ Page loads past Cloudflare challenge screen
-       ✓ Access to protected content is granted
-       
-    7. ALTERNATIVES FOR TESTING:
-       If you need to test bypass functionality without real Cloudflare:
-       - Use enable_auto_solve_cloudflare() which doesn't require protection
-       - Test with disable_auto_solve_cloudflare() to verify controls work
-       - Use expect_and_bypass_cloudflare() for context manager approach
-       
-    EXAMPLE USAGE:
-    ==============
-    # This WILL timeout (expected behavior):
-    bypass_cloudflare(tab_id, "https://httpbin.org", timeout=10)
-    # Error: "Cloudflare bypass timed out after 10 seconds"
-    
-    # This MIGHT work if site has protection:
-    bypass_cloudflare(tab_id, "https://discord.com", timeout=60)
-    
-    # For testing controls without real protection:
-    enable_auto_solve_cloudflare(tab_id, time_before_click=3)
-    disable_auto_solve_cloudflare(tab_id)
-    """
-    try:
-        tab = get_tab_session(tab_id)
-        if not tab:
-            raise ValueError(f"Tab '{tab_id}' not found")
-        
-        # Use a more robust approach with asyncio.wait_for to ensure timeout is respected
-        async def _perform_bypass():
-            # Navigate to the URL first, then use the context manager to bypass cloudflare
-            await tab.go_to(url)
-            
-            # Wait for page load before attempting bypass
-            await asyncio.sleep(3)
-            
-            async with tab.expect_and_bypass_cloudflare_captcha(
-                time_before_click=2,
-                time_to_wait_captcha=timeout
-            ):
-                # Wait for the bypass process to stabilize
-                await asyncio.sleep(5)
-            
-            # Give additional time for post-bypass processing
-            await asyncio.sleep(3)
-        
-        # Apply overall timeout to the entire bypass operation
-        await asyncio.wait_for(_perform_bypass(), timeout=timeout)
-
-        return create_success_response(f"Cloudflare bypass completed for {url}")
-    except asyncio.TimeoutError:
-        return create_error_response(f"Cloudflare bypass timed out after {timeout} seconds")
-    except Exception as e:
-        return create_error_response(f"Cloudflare bypass failed: {str(e)}")
-
-async def enable_auto_solve_cloudflare(
-    tab_id: str,
-    custom_selector: Optional[str] = None,
-    time_before_click: float = 5
-):
-    """Enable automatic Cloudflare captcha solving in background."""
-    try:
-        tab = get_tab_session(tab_id)
-        if not tab:
-            raise ValueError(f"Tab '{tab_id}' not found")
-        
-        selector = None
-        if custom_selector:
-            selector = (By.CSS_SELECTOR, custom_selector)
-        
-        await tab.enable_auto_solve_cloudflare_captcha(
-            custom_selector=selector,
-            time_before_click=time_before_click
-        )
-        
-        return create_success_response("Auto-solve Cloudflare captcha enabled")
-    except Exception as e:
-        return create_error_response(f"Enable auto-solve Cloudflare failed: {str(e)}")
-
-async def disable_auto_solve_cloudflare(tab_id: str):
-    """Disable automatic Cloudflare captcha solving."""
-    try:
-        tab = get_tab_session(tab_id)
-        if not tab:
-            raise ValueError(f"Tab '{tab_id}' not found")
-        
-        await tab.disable_auto_solve_cloudflare_captcha()
-        
-        return create_success_response("Auto-solve Cloudflare captcha disabled")
-    except Exception as e:
-        return create_error_response(f"Disable auto-solve Cloudflare failed: {str(e)}")
-
-async def expect_and_bypass_cloudflare(
-    tab_id: str,
-    url: str,
-    custom_selector: Optional[str] = None,
-    time_before_click: float = 5,
-    timeout: float = 60
-):
-    """Use context manager approach for Cloudflare bypass with waiting."""
-    try:
-        tab = get_tab_session(tab_id)
-        if not tab:
-            raise ValueError(f"Tab '{tab_id}' not found")
-        
-        selector = None
-        if custom_selector:
-            selector = (By.CSS_SELECTOR, custom_selector)
-        
-        async with tab.expect_and_bypass_cloudflare_captcha(
-            custom_selector=selector,
-            time_before_click=time_before_click
-        ):
-            await tab.go_to(url)
-            await asyncio.sleep(timeout)
-        
-        return create_success_response(f"Cloudflare bypass completed for {url}")
-    except Exception as e:
-        return create_error_response(f"Expect and bypass Cloudflare failed: {str(e)}")
 
 async def handle_alert(tab_id: str, action: str = "accept", text: Optional[str] = None):
     """
@@ -4499,10 +4880,6 @@ TOOL_HANDLERS = {
     "disable_file_chooser_intercept": disable_file_chooser_intercept,
     "wait_for_page_load": wait_for_page_load,
     "wait_for_function": wait_for_function,
-    "bypass_cloudflare": bypass_cloudflare,
-    "enable_auto_solve_cloudflare": enable_auto_solve_cloudflare,
-    "disable_auto_solve_cloudflare": disable_auto_solve_cloudflare,
-    "expect_and_bypass_cloudflare": expect_and_bypass_cloudflare,
     "handle_alert": handle_alert,
     "has_dialog": has_dialog,
     "get_dialog_message": get_dialog_message,
