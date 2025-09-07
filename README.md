@@ -3,6 +3,12 @@
 
 A comprehensive browser automation toolkit providing Chrome/Chromium control through MCP (Model Context Protocol).
 
+## Setup in Claude Code globally:
+
+```bash
+claude mcp remove pydoll-mcp && claude mcp add --scope user pydoll-mcp /usr/local/bin/pydoll-mcp
+```
+
 ## Quick Start
 
 ```python
