@@ -80,8 +80,6 @@ mcp__pydoll-browser__close_browser_session(session_id="my-session")
 - `get_network_logs` - Retrieve request logs
 
 ### Advanced Features
-- `bypass_cloudflare` - Automatic Cloudflare bypass
-- `enable_auto_solve_cloudflare` - Background captcha solving
 - `handle_alert` - Manage JavaScript dialogs
 - `set_cookies` / `get_cookies` / `delete_cookies` - Cookie management
 
