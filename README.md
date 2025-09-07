@@ -1,4 +1,5 @@
 # PyDoll MCP Browser Tools
+<img width="1919" height="940" alt="nowsecure_fresh" src="https://github.com/user-attachments/assets/9248c0ac-8671-4097-b5cb-170c9c4c9ed5" />
 
 A comprehensive browser automation toolkit providing Chrome/Chromium control through MCP (Model Context Protocol).
 
