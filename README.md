@@ -6,6 +6,7 @@ A comprehensive browser automation toolkit providing Chrome/Chromium control thr
 ## Setup in Claude Code globally:
 
 ```bash
+curl -o /usr/local/bin/pydoll-mcp https://raw.githubusercontent.com/coffeegrind123/pydoll-mcp/refs/heads/master/pydoll-mcp
 claude mcp remove pydoll-mcp && claude mcp add --scope user pydoll-mcp /usr/local/bin/pydoll-mcp
 ```
 
