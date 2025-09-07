@@ -38,17 +38,25 @@ pip install -r requirements.txt
 Edit your Claude Desktop configuration file at:
 `%APPDATA%\Claude\claude_desktop_config.json`
 
-Add this configuration:
+Add this configuration (replace `C:\Users\YourUsername` with your actual username):
 ```json
 {
   "mcpServers": {
     "pydoll-mcp": {
       "command": "python",
-      "args": ["%APPDATA%\\pydoll-mcp\\pydoll-mcp"]
+      "args": ["C:\\Users\\YourUsername\\AppData\\Roaming\\pydoll-mcp\\pydoll-mcp"]
     }
   }
 }
 ```
+
+**Alternative (if you know your exact path):**
+```powershell
+# Run this in PowerShell to get your exact path:
+echo "$env:APPDATA\pydoll-mcp\pydoll-mcp"
+```
+
+Then use that full path in the configuration.
 
 **Restart Claude Desktop** to load the MCP server.
 
