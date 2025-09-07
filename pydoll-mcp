@@ -300,6 +300,30 @@ def get_platform_allowed_paths():
             os.path.expanduser('~/')
         ]
 
+def is_newer_version(version1, version2):
+    """Compare two semantic version strings. Returns True if version1 is newer than version2."""
+    try:
+        # Split versions into parts and convert to integers
+        v1_parts = [int(x) for x in version1.split('.')]
+        v2_parts = [int(x) for x in version2.split('.')]
+        
+        # Pad shorter version with zeros
+        max_len = max(len(v1_parts), len(v2_parts))
+        v1_parts += [0] * (max_len - len(v1_parts))
+        v2_parts += [0] * (max_len - len(v2_parts))
+        
+        # Compare each part
+        for i in range(max_len):
+            if v1_parts[i] > v2_parts[i]:
+                return True
+            elif v1_parts[i] < v2_parts[i]:
+                return False
+        
+        return False  # Versions are equal
+    except ValueError:
+        # Fallback to string comparison if parsing fails
+        return version1 != version2
+
 def make_file_executable(file_path):
     """Make file executable in a cross-platform way"""
     system = platform.system()
@@ -553,7 +577,8 @@ def auto_update_check():
             print("Update check failed, continuing with current version", file=sys.stderr)
             return False
         
-        if remote_version != __version__:
+        # Compare versions semantically
+        if is_newer_version(remote_version, __version__):
             print(f"New version available: {remote_version} (current: {__version__})", file=sys.stderr)
             
             if perform_update():
