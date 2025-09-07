@@ -153,6 +153,7 @@ import urllib.error
 import shutil
 import subprocess
 import time
+import platform
 from datetime import datetime
 
 sys.stderr = os.fdopen(sys.stderr.fileno(), 'w', 1)
@@ -225,10 +226,111 @@ logger.info("Applied Shadow DOM monkey patch to PyDoll WebElement")
 # Server version
 __version__ = "1.0.1"
 
+# Cross-platform utility functions
+def get_platform_temp_dir():
+    """Get platform-appropriate temporary directory"""
+    if platform.system() == "Windows":
+        return os.environ.get('TEMP', os.environ.get('TMP', 'C:\\Windows\\Temp'))
+    else:
+        return '/tmp'
+
+def get_platform_cache_dir():
+    """Get platform-appropriate cache directory"""
+    system = platform.system()
+    if system == "Windows":
+        cache_dir = os.environ.get('LOCALAPPDATA', os.path.expanduser('~\\AppData\\Local'))
+        return os.path.join(cache_dir, 'pydoll-mcp')
+    elif system == "Darwin":  # macOS
+        return os.path.expanduser('~/Library/Caches/pydoll-mcp')
+    else:  # Linux and others
+        xdg_cache = os.environ.get('XDG_CACHE_HOME', os.path.expanduser('~/.cache'))
+        return os.path.join(xdg_cache, 'pydoll-mcp')
+
+def get_platform_allowed_paths():
+    """Get platform-appropriate allowed installation paths"""
+    system = platform.system()
+    if system == "Windows":
+        return [
+            'C:\\Program Files\\',
+            'C:\\Program Files (x86)\\',
+            os.environ.get('PROGRAMFILES', 'C:\\Program Files\\'),
+            os.environ.get('PROGRAMFILES(X86)', 'C:\\Program Files (x86)\\'),
+            os.path.expanduser('~\\AppData\\Local\\'),
+            os.path.expanduser('~\\AppData\\Roaming\\'),
+            os.path.expanduser('~\\')
+        ]
+    elif system == "Darwin":  # macOS
+        return [
+            '/usr/local/bin/',
+            '/usr/bin/',
+            '/opt/',
+            '/Applications/',
+            os.path.expanduser('~/Applications/'),
+            os.path.expanduser('~/bin/'),
+            os.path.expanduser('~/'),
+        ]
+    else:  # Linux and others
+        return [
+            '/usr/local/bin/',
+            '/usr/bin/',
+            '/opt/',
+            os.path.expanduser('~/bin/'),
+            os.path.expanduser('~/')
+        ]
+
+def make_file_executable(file_path):
+    """Make file executable in a cross-platform way"""
+    system = platform.system()
+    if system == "Windows":
+        # On Windows, executable permission is handled differently
+        # We don't need to change permissions for Python scripts
+        pass
+    else:
+        # Unix-like systems (Linux, macOS)
+        os.chmod(file_path, 0o755)
+
+def safe_remove_file(file_path):
+    """Safely remove a file in a cross-platform way"""
+    try:
+        if os.path.exists(file_path):
+            # On Windows, sometimes we need to handle file locks
+            if platform.system() == "Windows":
+                # Try to remove read-only attribute if it exists
+                try:
+                    import stat
+                    os.chmod(file_path, stat.S_IWRITE)
+                except:
+                    pass
+            os.unlink(file_path)
+            return True
+    except Exception as e:
+        print(f"Warning: Could not remove file {file_path}: {e}", file=sys.stderr)
+    return False
+
+def get_platform_info():
+    """Get detailed platform information for debugging"""
+    return {
+        'system': platform.system(),
+        'machine': platform.machine(),
+        'platform': platform.platform(),
+        'python_version': platform.python_version(),
+        'temp_dir': get_platform_temp_dir(),
+        'cache_dir': get_platform_cache_dir(),
+        'allowed_paths': get_platform_allowed_paths()
+    }
+
 # Auto-Update System URLs and Configuration
 VERSION_URL = "https://raw.githubusercontent.com/coffeegrind123/pydoll-mcp/refs/heads/master/version"
 BINARY_URL = "https://raw.githubusercontent.com/coffeegrind123/pydoll-mcp/refs/heads/master/pydoll-mcp"
-UPDATE_CACHE_FILE = "/tmp/pydoll-mcp-update-cache"
+
+# Create cache directory if it doesn't exist
+try:
+    CACHE_DIR = get_platform_cache_dir()
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    UPDATE_CACHE_FILE = os.path.join(CACHE_DIR, "pydoll-mcp-update-cache")
+except:
+    # Fallback to temp directory
+    UPDATE_CACHE_FILE = os.path.join(get_platform_temp_dir(), "pydoll-mcp-update-cache")
 
 def check_for_updates():
     """Check for updates using conditional requests to minimize bandwidth"""
@@ -291,10 +393,13 @@ def check_for_updates():
 def perform_update():
     """Download and install the updated version"""
     try:
-        print("Downloading updated pydoll-mcp...", file=sys.stderr)
+        platform_info = get_platform_info()
+        print(f"Downloading updated pydoll-mcp on {platform_info['system']}...", file=sys.stderr)
         
         # Download to temporary file
-        temp_file = f"/tmp/pydoll-mcp-update-{int(time.time())}"
+        temp_dir = get_platform_temp_dir()
+        temp_file = os.path.join(temp_dir, f"pydoll-mcp-update-{int(time.time())}")
+        print(f"Using temporary file: {temp_file}", file=sys.stderr)
         
         request = urllib.request.Request(BINARY_URL, headers={'User-Agent': 'pydoll-mcp-updater/1.0'})
         with urllib.request.urlopen(request, timeout=30) as response:
@@ -339,21 +444,23 @@ def perform_update():
                 raise Exception(f"Downloaded file has Python syntax errors: {e}")
                 
         except Exception as e:
-            os.unlink(temp_file)
+            safe_remove_file(temp_file)
             raise Exception(f"Downloaded file validation failed: {e}")
         
         # Make executable
-        os.chmod(temp_file, 0o755)
+        make_file_executable(temp_file)
         
         # Get current script path with additional security checks
         current_script = os.path.abspath(__file__)
         
         # Security: Ensure we're only updating files we should be updating
-        if not current_script.endswith('pydoll-mcp'):
+        script_name = os.path.basename(current_script)
+        valid_names = ['pydoll-mcp', 'pydoll-mcp.exe', 'pydoll-mcp.py']
+        if not any(script_name == name or script_name.endswith(name) for name in valid_names):
             raise Exception(f"Refusing to update non-pydoll-mcp file: {current_script}")
         
         # Security: Ensure the current script path is reasonable
-        allowed_paths = ['/usr/local/bin/', '/usr/bin/', '/opt/', os.path.expanduser('~')]
+        allowed_paths = get_platform_allowed_paths()
         if not any(current_script.startswith(path) for path in allowed_paths):
             raise Exception(f"Refusing to update file in suspicious location: {current_script}")
         
@@ -397,32 +504,27 @@ def perform_update():
             backups = sorted(glob.glob(backup_pattern))
             if len(backups) > 3:
                 for old_backup in backups[:-3]:
-                    os.unlink(old_backup)
-                    print(f"Removed old backup: {old_backup}", file=sys.stderr)
+                    if safe_remove_file(old_backup):
+                        print(f"Removed old backup: {old_backup}", file=sys.stderr)
         except:
             pass  # Backup cleanup is non-critical
         
         # Clear update cache so next run will check again
-        try:
-            os.unlink(UPDATE_CACHE_FILE)
-        except:
-            pass
+        safe_remove_file(UPDATE_CACHE_FILE)
         
         return True
         
     except Exception as e:
         print(f"Update failed: {e}", file=sys.stderr)
         # Clean up temp file if it exists
-        try:
-            os.unlink(temp_file)
-        except:
-            pass
+        safe_remove_file(temp_file)
         return False
 
 def auto_update_check():
     """Perform automatic update check and update if needed"""
     try:
-        print(f"Checking for updates (current version: {__version__})...", file=sys.stderr)
+        platform_info = get_platform_info()
+        print(f"Checking for updates on {platform_info['system']} (current version: {__version__})...", file=sys.stderr)
         remote_version = check_for_updates()
         
         if remote_version is None:
