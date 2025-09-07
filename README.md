@@ -5,10 +5,37 @@ A comprehensive browser automation toolkit providing Chrome/Chromium control thr
 
 ## Setup in Claude Code globally:
 
+### Linux/macOS:
+
 ```bash
 curl -o /usr/local/bin/pydoll-mcp https://raw.githubusercontent.com/coffeegrind123/pydoll-mcp/refs/heads/master/pydoll-mcp
 claude mcp remove pydoll-mcp && claude mcp add --scope user pydoll-mcp /usr/local/bin/pydoll-mcp
 ```
+
+### Windows:
+
+1. **Download the pydoll-mcp script:**
+   ```powershell
+   Invoke-WebRequest -Uri "https://raw.githubusercontent.com/coffeegrind123/pydoll-mcp/refs/heads/master/pydoll-mcp" -OutFile "$env:USERPROFILE\pydoll-mcp"
+   ```
+
+2. **Add to Claude Desktop:**
+   Manually edit your Claude Desktop configuration file at:
+   `%APPDATA%\Claude\claude_desktop_config.json`
+   
+   Add this configuration:
+   ```json
+   {
+     "mcpServers": {
+       "pydoll-mcp": {
+         "command": "python",
+         "args": ["%USERPROFILE%\\pydoll-mcp"]
+       }
+     }
+   }
+   ```
+
+3. **Restart Claude Desktop** to load the MCP server.
 
 ## Quick Start
 
