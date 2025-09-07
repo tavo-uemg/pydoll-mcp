@@ -116,7 +116,29 @@ from typing import Any, Dict, List, Optional, Union, Callable
 # Auto-detect PyDoll installation and add to path
 def setup_pydoll_path():
     """Auto-detect PyDoll installation and configure Python path"""
-    possible_paths = [
+    # Get the directory containing this script
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    
+    # Auto-detect local venv paths first (relative to script location)
+    import platform
+    python_version = f"{sys.version_info.major}.{sys.version_info.minor}"
+    
+    local_venv_paths = []
+    if platform.system() == "Windows":
+        local_venv_paths = [
+            os.path.join(script_dir, "venv", "Lib", "site-packages"),
+            os.path.join(script_dir, ".venv", "Lib", "site-packages"),
+        ]
+    else:
+        local_venv_paths = [
+            os.path.join(script_dir, "venv", "lib", f"python{python_version}", "site-packages"),
+            os.path.join(script_dir, ".venv", "lib", f"python{python_version}", "site-packages"),
+            os.path.join(script_dir, "venv", "lib", f"python{sys.version_info.major}.{sys.version_info.minor}", "site-packages"),
+            os.path.join(script_dir, ".venv", "lib", f"python{sys.version_info.major}.{sys.version_info.minor}", "site-packages"),
+        ]
+    
+    # Fallback system paths
+    possible_paths = local_venv_paths + [
         "/opt/pydoll_env/lib/python3.11/site-packages",
         "/opt/pydoll_env/lib/python3.10/site-packages", 
         "/opt/pydoll_env/lib/python3.9/site-packages",

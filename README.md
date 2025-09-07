@@ -8,25 +8,25 @@ A comprehensive browser automation toolkit providing Chrome/Chromium control thr
 ### Linux/macOS:
 
 ```bash
-# Clone the repository
-git clone https://github.com/coffeegrind123/pydoll-mcp.git
-cd pydoll-mcp
+# Clone to standard location
+git clone https://github.com/coffeegrind123/pydoll-mcp.git ~/.pydoll-mcp
+cd ~/.pydoll-mcp
 
 # Create virtual environment and install dependencies
 python3 -m venv venv
 source venv/bin/activate
 pip install -r requirements.txt
 
-# Add to Claude Code
-claude mcp remove pydoll-mcp && claude mcp add --scope user pydoll-mcp $(pwd)/pydoll-mcp
+# Add to Claude Code (script auto-detects venv)
+claude mcp remove pydoll-mcp && claude mcp add --scope user pydoll-mcp ~/.pydoll-mcp/pydoll-mcp
 ```
 
 ### Windows:
 
 ```powershell
-# Clone the repository
-git clone https://github.com/coffeegrind123/pydoll-mcp.git
-cd pydoll-mcp
+# Clone to standard AppData location
+git clone https://github.com/coffeegrind123/pydoll-mcp.git "$env:APPDATA\pydoll-mcp"
+cd "$env:APPDATA\pydoll-mcp"
 
 # Create virtual environment and install dependencies
 python -m venv venv
@@ -35,7 +35,7 @@ pip install -r requirements.txt
 ```
 
 **Add to Claude Desktop:**
-Manually edit your Claude Desktop configuration file at:
+Edit your Claude Desktop configuration file at:
 `%APPDATA%\Claude\claude_desktop_config.json`
 
 Add this configuration:
@@ -43,16 +43,16 @@ Add this configuration:
 {
   "mcpServers": {
     "pydoll-mcp": {
-      "command": "C:\\path\\to\\pydoll-mcp\\venv\\Scripts\\python.exe",
-      "args": ["C:\\path\\to\\pydoll-mcp\\pydoll-mcp"]
+      "command": "python",
+      "args": ["%APPDATA%\\pydoll-mcp\\pydoll-mcp"]
     }
   }
 }
 ```
 
-**Note:** Replace `C:\\path\\to\\pydoll-mcp` with your actual clone directory path.
-
 **Restart Claude Desktop** to load the MCP server.
+
+> **Note:** The script automatically detects and uses the local `venv` directory - no need to specify the venv Python path!
 
 ## Quick Start
 
