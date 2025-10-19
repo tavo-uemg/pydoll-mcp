@@ -54,7 +54,7 @@ test = [
 ]
 
 [project.scripts]
-pydoll-mcp = "pydoll-mcp:main"
+pydoll-mcp = "pydoll_mcp:run_server"
 
 [tool.ruff]
 target-version = "py310"
