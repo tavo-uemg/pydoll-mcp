@@ -5294,20 +5294,17 @@ async def main_async():
     print("Server ready for JSON-RPC requests...", file=sys.stderr, flush=True)
     
     try:
-        # Use asyncio to read from stdin properly
-        reader = asyncio.StreamReader()
-        protocol = asyncio.StreamReaderProtocol(reader)
-        transport, _ = await asyncio.get_event_loop().connect_read_pipe(
-            lambda: protocol, sys.stdin
-        )
+        # Windows-compatible stdin reading
+        loop = asyncio.get_event_loop()
         
         while True:
             try:
-                line = await reader.readline()
+                # Use run_in_executor for blocking stdin read (Windows-compatible)
+                line = await loop.run_in_executor(None, sys.stdin.readline)
                 if not line:
                     break
                     
-                line = line.decode().strip()
+                line = line.strip()
                 if not line:
                     continue
             except Exception as e:
